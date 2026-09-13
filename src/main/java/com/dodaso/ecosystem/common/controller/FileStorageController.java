@@ -1,13 +1,13 @@
 package com.dodaso.ecosystem.common.controller;
 
 import com.dodaso.ecosystem.common.container.FileUploadDTOContainer;
+import com.dodaso.ecosystem.common.dto.FileItemDTO;
 import com.dodaso.ecosystem.common.dto.FileUploadDTO;
+import com.dodaso.ecosystem.common.dto.FileUploadRequestDTO;
 import com.dodaso.ecosystem.common.service.FileUploadService;
 import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -17,10 +17,10 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 
 /**
  * Shared file upload/download/delete endpoint, used by elcm-service (and,
@@ -30,11 +30,23 @@ import org.springframework.web.multipart.MultipartFile;
  * "staged document" anywhere here). See FileUploadService's class Javadoc
  * for the full upload flow (Azure transfer + FileUpload row persistence).
  *
- * Returns/accepts FileUploadDTOContainer, per the common-data-model
- * DataContainer convention already used by ecws-data-model/elcm-data-model
- * -- a single DTO field for single-record responses, a list field for
- * multi-record ones -- rather than a bare List/DTO, so this matches how
- * elcm-service's own controllers already shape their responses.
+ * IMPORTANT: /upload takes a plain JSON body (FileUploadRequestDTO), NOT
+ * multipart/form-data, even though the request carries raw file bytes.
+ * This was deliberately changed from an earlier multipart-based version --
+ * every existing cross-service call in this codebase (PipelineMetricsBean,
+ * UserHelper) goes through RESTServiceClient/RESTReqContainer, which posts
+ * a JSON DTO body, not multipart. Jackson serializes/deserializes byte[]
+ * fields as base64 strings automatically, so FileItemDTO.content just
+ * works as a normal JSON field -- no multipart parsing needed on this
+ * side. The browser-to-elcm-ui hop is unaffected: that's still a real
+ * multipart post via p:fileUpload; this endpoint only describes the
+ * second hop (elcm-ui forwarding already-received bytes on to here).
+ *
+ * Returns FileUploadDTOContainer, per the common-data-model DataContainer
+ * convention already used by ecws-data-model/elcm-data-model -- a single
+ * DTO field for single-record responses, a list field for multi-record
+ * ones -- rather than a bare List/DTO, so this matches how elcm-service's
+ * own controllers already shape their responses.
  */
 @RestController
 @RequestMapping("/api/v1/files")
@@ -45,43 +57,23 @@ public class FileStorageController {
     private final FileUploadService fileUploadService;
 
     /**
-     * Multiple files in one request -- matches ELCM UI's Upload Files
-     * dialog, which queues several files client-side (p:fileUpload,
-     * multiple="true") before submitting. "files" as the multipart field
-     * name is the conventional one Spring's MultipartFile[] binding
-     * expects; the caller (elcm-service, relaying from elcm-ui) must post
-     * each file under that same field name.
-     *
-     * containerName is optional (falls back to
+     * containerName is optional on the request DTO (falls back to
      * azure.storage.default-container-name); sourceApp/ownerType/ownerId
-     * are required -- these are what let a later "list files for this
+     * are expected -- these are what let a later "list files for this
      * record" query (GET /owner) find them again.
      */
-    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<FileUploadDTOContainer> upload(
-        @RequestParam("files") final MultipartFile[] files,
-        @RequestParam final String sourceApp,
-        @RequestParam final String ownerType,
-        @RequestParam final Long ownerId,
-        @RequestParam(required = false) final String containerName) {
+    @PostMapping(value = "/upload", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadRequestDTO request) {
 
-        final List<FileUploadRequest> requests = new ArrayList<>(files.length);
-        for (final MultipartFile file : files) {
-            try {
-                requests.add(new FileUploadRequest(file.getOriginalFilename(), file.getContentType(), file.getBytes()));
-            } catch (final IOException e) {
-                // One unreadable file shouldn't be swallowed silently --
-                // surfacing as a 500 for the whole batch is deliberate here
-                // rather than skipping the bad file and partially
-                // succeeding, since the caller expects a result entry per
-                // file it sent.
-                throw new UncheckedIOException("Failed to read uploaded file " + file.getOriginalFilename(), e);
-            }
-        }
+        final List<FileItemDTO> files = request.getFiles();
+        final List<FileUploadRequest> requests = (files == null ? List.<FileItemDTO>of() : files).stream()
+            .map(item -> new FileUploadRequest(item.getFileName(), item.getContentType(), item.getContent()))
+            .collect(Collectors.toList());
 
-        log.info("Uploading {} file(s) for {}/{} (sourceApp={})", requests.size(), ownerType, ownerId, sourceApp);
+        log.info("Uploading {} file(s) for {}/{} (sourceApp={})",
+            requests.size(), request.getOwnerType(), request.getOwnerId(), request.getSourceApp());
         final List<FileUploadDTO> uploaded = fileUploadService.uploadFiles(
-            requests, containerName, sourceApp, ownerType, ownerId);
+            requests, request.getContainerName(), request.getSourceApp(), request.getOwnerType(), request.getOwnerId());
 
         final FileUploadDTOContainer container = new FileUploadDTOContainer();
         container.setFileUploadDTOList(uploaded);
