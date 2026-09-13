@@ -16,7 +16,7 @@ public class CacheConfig {
         .maximumSize(500)
         .expireAfterWrite(30, TimeUnit.MINUTES)
         .recordStats();
-    CaffeineCacheManager caffeineCacheManager = new CaffeineCacheManager("ecws", "ewmp");
+    CaffeineCacheManager caffeineCacheManager = new CaffeineCacheManager("ecws", "elcm");
     caffeineCacheManager.setCaffeine(caffeine);
     return caffeineCacheManager;
   }
