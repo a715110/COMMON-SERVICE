@@ -1,14 +1,15 @@
 package com.dodaso.ecosystem.common.service;
 
-import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
 import com.dodaso.ecosystem.common.dto.FileUploadDTO;
-import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 import com.dodaso.ecosystem.common.entity.FileThumbnail;
 import com.dodaso.ecosystem.common.entity.FileUpload;
 import com.dodaso.ecosystem.common.entity.LkpThumbnailStatus;
 import com.dodaso.ecosystem.common.repository.FileThumbnailRepository;
 import com.dodaso.ecosystem.common.repository.FileUploadRepository;
 import com.dodaso.ecosystem.common.repository.LkpThumbnailStatusRepository;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadContext;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 import com.dodaso.ecosystem.common.service.handler.FileUploadDownloadHandler;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -30,6 +31,12 @@ import org.springframework.transaction.annotation.Transactional;
  * list and stores what it needs against its own staged_document rows;
  * this service does not know about staged_document at all -- ownerType/
  * ownerId here are opaque scalars from elcm-service's point of view).
+ *
+ * companyId is required now (multi-company support, decided in chat) --
+ * it's persisted on the FileUpload row and also passed to the Azure
+ * handler as part of BlobUploadContext, which tags each blob with it
+ * (Azure Blob Index Tags) rather than encoding it into the container or
+ * path -- see AzureBlobStorageHandler's class Javadoc for why.
  *
  * createdBy/updatedBy on the saved rows come from the existing
  * HeaderBasedAuditorAware infrastructure (X-User-Context / X-Remote-User
@@ -56,14 +63,16 @@ public class FileUploadService {
                                             final String containerName,
                                             final String sourceApp,
                                             final String ownerType,
-                                            final Long ownerId) {
+                                            final Long ownerId,
+                                            final Long companyId) {
         final String resolvedContainer = (containerName != null && !containerName.isBlank())
             ? containerName : defaultContainerName;
 
-        final List<BlobUploadResult> blobResults = fileUploadDownloadHandler.uploadFiles(files, resolvedContainer);
+        final BlobUploadContext context = new BlobUploadContext(sourceApp, ownerType, ownerId, companyId);
+        final List<BlobUploadResult> blobResults = fileUploadDownloadHandler.uploadFiles(files, resolvedContainer, context);
 
         return blobResults.stream()
-            .map(blobResult -> persist(blobResult, sourceApp, ownerType, ownerId))
+            .map(blobResult -> persist(blobResult, sourceApp, ownerType, ownerId, companyId))
             .map(this::toDto)
             .collect(Collectors.toList());
     }
@@ -74,8 +83,8 @@ public class FileUploadService {
             .orElse(null);
     }
 
-    public List<FileUploadDTO> findByOwner(final String ownerType, final Long ownerId) {
-        return fileUploadRepository.findByOwnerTypeAndOwnerIdAndActiveIndTrue(ownerType, ownerId).stream()
+    public List<FileUploadDTO> findByOwner(final Long companyId, final String ownerType, final Long ownerId) {
+        return fileUploadRepository.findByCompanyIdAndOwnerTypeAndOwnerIdAndActiveIndTrue(companyId, ownerType, ownerId).stream()
             .map(this::toDto)
             .collect(Collectors.toList());
     }
@@ -100,11 +109,12 @@ public class FileUploadService {
     }
 
     private FileUpload persist(final BlobUploadResult blobResult, final String sourceApp,
-                                final String ownerType, final Long ownerId) {
+                                final String ownerType, final Long ownerId, final Long companyId) {
         final FileUpload fileUpload = new FileUpload();
         fileUpload.setSourceApp(sourceApp);
         fileUpload.setOwnerType(ownerType);
         fileUpload.setOwnerId(ownerId);
+        fileUpload.setCompanyId(companyId);
         fileUpload.setFileName(blobResult.originalFileName());
         fileUpload.setContentType(blobResult.contentType());
         fileUpload.setFileSize(blobResult.sizeBytes());
@@ -155,6 +165,7 @@ public class FileUploadService {
         dto.setSourceApp(entity.getSourceApp());
         dto.setOwnerType(entity.getOwnerType());
         dto.setOwnerId(entity.getOwnerId());
+        dto.setCompanyId(entity.getCompanyId());
         dto.setFileName(entity.getFileName());
         dto.setContentType(entity.getContentType());
         dto.setFileSize(entity.getFileSize());

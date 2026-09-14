@@ -25,10 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Shared file upload/download/delete endpoint, used by elcm-service (and,
  * eventually, ecws-service) rather than being ELCM- or ECWS-specific --
- * that's why ownerType/ownerId/sourceApp are opaque caller-supplied
- * scalars rather than anything ELCM-domain-shaped (e.g. no reference to
- * "staged document" anywhere here). See FileUploadService's class Javadoc
- * for the full upload flow (Azure transfer + FileUpload row persistence).
+ * that's why ownerType/ownerId/sourceApp/companyId are opaque caller-
+ * supplied scalars rather than anything ELCM-domain-shaped (e.g. no
+ * reference to "staged document" anywhere here). See FileUploadService's
+ * class Javadoc for the full upload flow (Azure transfer + FileUpload row
+ * persistence, and how companyId flows into Azure Blob Index Tags).
  *
  * IMPORTANT: /upload takes a plain JSON body (FileUploadRequestDTO), NOT
  * multipart/form-data, even though the request carries raw file bytes.
@@ -58,9 +59,10 @@ public class FileStorageController {
 
     /**
      * containerName is optional on the request DTO (falls back to
-     * azure.storage.default-container-name); sourceApp/ownerType/ownerId
-     * are expected -- these are what let a later "list files for this
-     * record" query (GET /owner) find them again.
+     * azure.storage.default-container-name); sourceApp/ownerType/ownerId/
+     * companyId are expected -- these are what let a later "list files
+     * for this record" query (GET /owner) find them again, and what get
+     * set as this blob's Azure Blob Index Tags.
      */
     @PostMapping(value = "/upload", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadRequestDTO request) {
@@ -70,38 +72,43 @@ public class FileStorageController {
             .map(item -> new FileUploadRequest(item.getFileName(), item.getContentType(), item.getContent()))
             .collect(Collectors.toList());
 
-        log.info("Uploading {} file(s) for {}/{} (sourceApp={})",
-            requests.size(), request.getOwnerType(), request.getOwnerId(), request.getSourceApp());
+        log.info("Uploading {} file(s) for {}/{} (sourceApp={}, companyId={})",
+            requests.size(), request.getOwnerType(), request.getOwnerId(), request.getSourceApp(), request.getCompanyId());
         final List<FileUploadDTO> uploaded = fileUploadService.uploadFiles(
-            requests, request.getContainerName(), request.getSourceApp(), request.getOwnerType(), request.getOwnerId());
+            requests, request.getContainerName(), request.getSourceApp(), request.getOwnerType(),
+            request.getOwnerId(), request.getCompanyId());
 
         final FileUploadDTOContainer container = new FileUploadDTOContainer();
         container.setFileUploadDTOList(uploaded);
         return ResponseEntity.ok(container);
     }
 
-    @GetMapping("/{id}")
-    public ResponseEntity<FileUploadDTOContainer> getById(@PathVariable final Long id) {
-        final FileUploadDTO dto = fileUploadService.findById(id);
-        if (dto == null) {
-            return ResponseEntity.notFound().build();
-        }
-        final FileUploadDTOContainer container = new FileUploadDTOContainer();
-        container.setFileUploadDTO(dto);
-        return ResponseEntity.ok(container);
-    }
+    // @GetMapping("/{id}")
+    // public ResponseEntity<FileUploadDTOContainer> getById(@PathVariable final Long id) {
+    //     final FileUploadDTO dto = fileUploadService.findById(id);
+    //     if (dto == null) {
+    //         return ResponseEntity.notFound().build();
+    //     }
+    //     final FileUploadDTOContainer container = new FileUploadDTOContainer();
+    //     container.setFileUploadDTO(dto);
+    //     return ResponseEntity.ok(container);
+    // }
 
-    /** e.g. GET /api/v1/files/owner?ownerType=STAGED_DOCUMENT&ownerId=42
-     * to list every file attached to one elcm-service record. */
-    @GetMapping("/owner")
-    public ResponseEntity<FileUploadDTOContainer> getByOwner(
-        @RequestParam final String ownerType,
-        @RequestParam final Long ownerId) {
+    /** e.g. GET /api/v1/files/owner?companyId=7&ownerType=STAGED_DOCUMENT&ownerId=42
+     * to list every file attached to one elcm-service record. companyId
+     * is required, not optional -- see FileUploadRepository's finder for
+     * why ownerType/ownerId alone aren't a safe-enough scope once this
+     * table spans multiple companies. */
+    // @GetMapping("/owner")
+    // public ResponseEntity<FileUploadDTOContainer> getByOwner(
+    //     @RequestParam final Long companyId,
+    //     @RequestParam final String ownerType,
+    //     @RequestParam final Long ownerId) {
 
-        final FileUploadDTOContainer container = new FileUploadDTOContainer();
-        container.setFileUploadDTOList(fileUploadService.findByOwner(ownerType, ownerId));
-        return ResponseEntity.ok(container);
-    }
+    //     final FileUploadDTOContainer container = new FileUploadDTOContainer();
+    //     container.setFileUploadDTOList(fileUploadService.findByOwner(companyId, ownerType, ownerId));
+    //     return ResponseEntity.ok(container);
+    // }
 
     @GetMapping("/{id}/download")
     public ResponseEntity<byte[]> download(@PathVariable final Long id) {
