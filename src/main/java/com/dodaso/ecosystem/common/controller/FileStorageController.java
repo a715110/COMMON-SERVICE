@@ -65,15 +65,15 @@ public class FileStorageController {
      * set as this blob's Azure Blob Index Tags.
      */
     @PostMapping(value = "/upload", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadRequestDTO request) {
-
+    public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadDTOContainer uploadDTOContainer) {
+        FileUploadRequestDTO request = uploadDTOContainer.getFileUploadRequestDTO();
         final List<FileItemDTO> files = request.getFiles();
         final List<FileUploadRequest> requests = (files == null ? List.<FileItemDTO>of() : files).stream()
             .map(item -> new FileUploadRequest(item.getFileName(), item.getContentType(), item.getContent()))
             .collect(Collectors.toList());
 
         log.info("Uploading {} file(s) for {}/{} (sourceApp={}, companyId={})",
-            requests.size(), request.getOwnerType(), request.getOwnerId(), request.getSourceApp(), request.getCompanyId());
+            files != null? files.size():0, request.getOwnerType(), request.getOwnerId(), request.getSourceApp(), request.getCompanyId());
         final List<FileUploadDTO> uploaded = fileUploadService.uploadFiles(
             requests, request.getContainerName(), request.getSourceApp(), request.getOwnerType(),
             request.getOwnerId(), request.getCompanyId());
