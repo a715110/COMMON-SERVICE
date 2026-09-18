@@ -18,9 +18,9 @@ public interface FileUploadDownloadHandler {
     /** Uploads one or more files into containerName, creating the container
      * if it doesn't already exist. context supplies the batch-level info
      * (sourceApp/ownerType/ownerId/companyId) used to build each blob's
-     * path -- {sourceApp}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/{uuid}__
-     * {fileName} -- and its Blob Index Tags. Returns one result per input
-     * file, in the same order. */
+     * path -- {companyId}/{sourceApp}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/
+     * {uuid}__{fileName} -- and its Blob Index Tags. Returns one result per
+     * input file, in the same order. */
     List<BlobUploadResult> uploadFiles(List<FileUploadRequest> files, String containerName, BlobUploadContext context);
 
     /** Raw bytes of a previously uploaded file. */
