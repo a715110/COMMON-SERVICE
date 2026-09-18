@@ -1,9 +1,10 @@
 package com.dodaso.ecosystem.common.service.handler;
 
-import com.dodaso.ecosystem.common.service.dto.BlobUploadContext;
-import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
-import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 import java.util.List;
+
+import com.dodaso.ecosystem.common.dto.BlobUploadContext;
+import com.dodaso.ecosystem.common.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.dto.FileUploadRequest;
 
 /**
  * Contract for moving file bytes to/from wherever this service actually
