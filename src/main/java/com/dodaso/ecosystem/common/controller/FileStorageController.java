@@ -1,6 +1,7 @@
 package com.dodaso.ecosystem.common.controller;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpHeaders;
@@ -12,10 +13,12 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.dodaso.ecosystem.common.container.FileUploadDTOContainer;
 import com.dodaso.ecosystem.common.dto.FileItemDTO;
+import com.dodaso.ecosystem.common.dto.FileThumbnailDTO;
 import com.dodaso.ecosystem.common.dto.FileUploadDTO;
 import com.dodaso.ecosystem.common.dto.FileUploadRequest;
 import com.dodaso.ecosystem.common.dto.FileUploadRequestDTO;
@@ -69,16 +72,19 @@ public class FileStorageController {
     @PostMapping(value = "/upload", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadDTOContainer uploadDTOContainer) {
         FileUploadRequestDTO request = uploadDTOContainer.getFileUploadRequestDTO();
+        
         final List<FileItemDTO> files = request.getFiles();
+
         final List<FileUploadRequest> requests = (files == null ? List.<FileItemDTO>of() : files).stream()
-            .map(item -> new FileUploadRequest(item.getFileName(), item.getContentType(), item.getContent()))
-            .collect(Collectors.toList());
+                .map(item -> new FileUploadRequest(item.getFileName(), item.getContentType(), item.getContent()))
+                .collect(Collectors.toList());
 
         log.info("Uploading {} file(s) for {}/{} (sourceApp={}, companyId={})",
-            files != null? files.size():0, request.getOwnerType(), request.getOwnerId(), request.getSourceApp(), request.getCompanyId());
+                files != null ? files.size() : 0, request.getOwnerType(), request.getOwnerId(), request.getSourceApp(),
+                request.getCompanyId());
         final List<FileUploadDTO> uploaded = fileUploadService.uploadFiles(
-            requests, request.getContainerName(), request.getSourceApp(), request.getOwnerType(),
-            request.getOwnerId(), request.getCompanyId());
+                requests, request.getContainerName(), request.getSourceApp(), request.getOwnerType(),
+                request.getOwnerId(), request.getCompanyId());
 
         final FileUploadDTOContainer container = new FileUploadDTOContainer();
         container.setFileUploadDTOList(uploaded);
@@ -86,45 +92,62 @@ public class FileStorageController {
     }
 
     // @GetMapping("/{id}")
-    // public ResponseEntity<FileUploadDTOContainer> getById(@PathVariable final Long id) {
-    //     final FileUploadDTO dto = fileUploadService.findById(id);
-    //     if (dto == null) {
-    //         return ResponseEntity.notFound().build();
-    //     }
-    //     final FileUploadDTOContainer container = new FileUploadDTOContainer();
-    //     container.setFileUploadDTO(dto);
-    //     return ResponseEntity.ok(container);
+    // public ResponseEntity<FileUploadDTOContainer> getById(@PathVariable final
+    // Long id) {
+    // final FileUploadDTO dto = fileUploadService.findById(id);
+    // if (dto == null) {
+    // return ResponseEntity.notFound().build();
+    // }
+    // final FileUploadDTOContainer container = new FileUploadDTOContainer();
+    // container.setFileUploadDTO(dto);
+    // return ResponseEntity.ok(container);
     // }
 
-    /** e.g. GET /api/v1/files/owner?companyId=7&ownerType=STAGED_DOCUMENT&ownerId=42
+    /**
+     * e.g. GET /api/v1/files/owner?companyId=7&ownerType=STAGED_DOCUMENT&ownerId=42
      * to list every file attached to one elcm-service record. companyId
      * is required, not optional -- see FileUploadRepository's finder for
      * why ownerType/ownerId alone aren't a safe-enough scope once this
-     * table spans multiple companies. */
+     * table spans multiple companies.
+     */
     // @GetMapping("/owner")
     // public ResponseEntity<FileUploadDTOContainer> getByOwner(
-    //     @RequestParam final Long companyId,
-    //     @RequestParam final String ownerType,
-    //     @RequestParam final Long ownerId) {
+    // @RequestParam final Long companyId,
+    // @RequestParam final String ownerType,
+    // @RequestParam final Long ownerId) {
 
-    //     final FileUploadDTOContainer container = new FileUploadDTOContainer();
-    //     container.setFileUploadDTOList(fileUploadService.findByOwner(companyId, ownerType, ownerId));
-    //     return ResponseEntity.ok(container);
+    // final FileUploadDTOContainer container = new FileUploadDTOContainer();
+    // container.setFileUploadDTOList(fileUploadService.findByOwner(companyId,
+    // ownerType, ownerId));
+    // return ResponseEntity.ok(container);
     // }
 
-    @GetMapping("/{id}/download")
-    public ResponseEntity<byte[]> download(@PathVariable final Long id) {
-        final FileUploadDTO metadata = fileUploadService.findById(id);
-        if (metadata == null) {
-            return ResponseEntity.notFound().build();
-        }
+    @GetMapping("/{id}")
+    public ResponseEntity<FileUploadDTO> getById(@PathVariable final Long id) {
+        return fileUploadService.findById(id)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
 
+    @GetMapping("/owner")
+    public List<FileUploadDTO> byOwner(@RequestParam final Long companyId, @RequestParam final String ownerType,
+            @RequestParam final Long ownerId) {
+        return fileUploadService.findByOwner(companyId, ownerType, ownerId);
+    }
+
+   @GetMapping("/{id}/download")
+    public ResponseEntity<byte[]> download(@PathVariable final Long id) {
+        final FileUploadDTO fileUploadDTO = fileUploadService.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("No file_upload row for id=" + id));
         final byte[] content = fileUploadService.download(id);
+
+        final MediaType mediaType = fileUploadDTO.getContentType() != null
+            ? MediaType.parseMediaType(fileUploadDTO.getContentType())
+            : MediaType.APPLICATION_OCTET_STREAM;
+
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + metadata.getFileName() + "\"")
-            .contentType(metadata.getContentType() != null
-                ? MediaType.parseMediaType(metadata.getContentType())
-                : MediaType.APPLICATION_OCTET_STREAM)
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileUploadDTO.getFileName() + "\"")
+            .contentType(mediaType)
             .body(content);
     }
 
@@ -134,4 +157,46 @@ public class FileStorageController {
         fileUploadService.softDelete(id);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * Metadata for the thumbnail belonging to file_upload id -- status
+     * code (PENDING/PROCESSING/COMPLETED/FAILED), dimensions, timestamps,
+     * lastErrorMessage on failure. Intended for a UI to poll after upload
+     * (generation is async and won't be ready immediately) before it
+     * bothers requesting the actual image bytes below. 404 means the file
+     * was never eligible for a thumbnail at all (e.g. non-image content
+     * type) -- there is no file_thumbnail row to report on.
+     */
+    @GetMapping("/{id}/thumbnail/status")
+    public ResponseEntity<FileThumbnailDTO> thumbnailStatus(@PathVariable final Long id) {
+        return fileUploadService.getThumbnailStatus(id)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Streams the generated thumbnail image for a file_upload row. Added
+     * alongside thumbnail generation itself: file_upload.blob_url /
+     * file_thumbnail.blob_url point at blobs in a private container, so
+     * neither can be dropped straight into a browser <img src> -- this
+     * endpoint is the only way a UI can actually render a thumbnail.
+     * Returns 404 if the file was never eligible for a thumbnail, and 202
+     * (Accepted, no body) if generation is still PENDING/PROCESSING or
+     * previously FAILED -- callers should treat both as "not ready yet"
+     * and fall back to a placeholder icon rather than treating them as
+     * errors; thumbnailStatus() above is how a caller tells "still
+     * working" apart from "failed".
+     */
+    @GetMapping("/{id}/thumbnail")
+    public ResponseEntity<byte[]> thumbnail(@PathVariable final Long id) {
+        final Optional<FileThumbnailDTO> statusDto = fileUploadService.getThumbnailStatus(id);
+        if (statusDto.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return fileUploadService.downloadThumbnail(id)
+                .map(content -> ResponseEntity.ok().contentType(MediaType.IMAGE_PNG).body(content))
+                .orElseGet(() -> ResponseEntity.accepted().build());
+    }
+
 }
