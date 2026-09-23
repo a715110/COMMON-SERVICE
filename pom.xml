@@ -511,6 +511,30 @@
     </dependency>
 
     <dependency>
+      <groupId>co.elastic.thumbnails4j</groupId>
+      <artifactId>thumbnails4j-core</artifactId>
+      <version>1.2.0</version>
+    </dependency>
+
+    <dependency>
+      <groupId>co.elastic.thumbnails4j</groupId>
+      <artifactId>thumbnails4j-pdf</artifactId>
+      <version>1.2.0</version>
+    </dependency>
+
+    <dependency>
+      <groupId>co.elastic.thumbnails4j</groupId>
+      <artifactId>thumbnails4j-image</artifactId>
+      <version>1.2.0</version>
+    </dependency>
+    
+    <dependency>
+      <groupId>co.elastic.thumbnails4j</groupId>
+      <artifactId>thumbnails4j-docx</artifactId>
+      <version>1.2.0</version>
+    </dependency>
+
+    <dependency>
       <artifactId>baseline-common</artifactId>
       <groupId>com.dodaso.ecosystem.baseline.common</groupId>
       <version>${revision}</version>

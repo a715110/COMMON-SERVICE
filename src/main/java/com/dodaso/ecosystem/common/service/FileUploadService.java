@@ -50,6 +50,13 @@ import lombok.extern.slf4j.Slf4j;
  * HeaderBasedAuditorAware infrastructure (X-User-Context / X-Remote-User
  * request header), not a parameter here -- see the @CreatedBy/@LastModifiedBy
  * annotations added to FileUpload/FileThumbnail in common-data-model.
+ *
+ * Every upload gets a file_thumbnail row queued (see queueThumbnail()) --
+ * the request returns as soon as file_upload/file_thumbnail(PENDING) are
+ * committed, without waiting for the thumbnail image itself. The client
+ * is expected to render a generic per-type placeholder immediately from
+ * file_upload.content_type alone and swap in the real thumbnail once
+ * ThumbnailGenerationService finishes and a later poll reports COMPLETED.
  */
 @Service
 @RequiredArgsConstructor
@@ -85,7 +92,7 @@ public class FileUploadService {
         // Zipped by index rather than mapped independently: persist() needs each
         // blob's ORIGINAL bytes (still held here in `files`) to hand off to
         // thumbnail generation without a redundant re-download from Azure --
-        // see queueThumbnailIfEligible()'s Javadoc. This relies on
+        // see queueThumbnail()'s Javadoc. This relies on
         // FileUploadDownloadHandler.uploadFiles() returning results in the same
         // order as the input list, which is part of its documented contract.
         return IntStream.range(0, blobResults.size())
@@ -115,8 +122,11 @@ public class FileUploadService {
     /**
      * Metadata for the thumbnail belonging to a file_upload row -- status
      * code, dimensions, timestamps, last error -- for a UI to poll ("is it
-     * ready yet?") without pulling image bytes. Empty means the file was
-     * never eligible for a thumbnail (e.g. non-image content type); a
+     * ready yet?") without pulling image bytes. Empty means no
+     * file_thumbnail row exists at all, which -- now that queueThumbnail()
+     * queues one for every upload -- should only happen for a file_upload
+     * row that predates this behavior, or if seeding lkp_thumbnail_status
+     * was missing at upload time (see queueThumbnail()'s Javadoc). A
      * present DTO with status PENDING/PROCESSING/FAILED means "not ready,
      * check back or show the failure", and COMPLETED means
      * downloadThumbnail() below will return bytes.
@@ -173,20 +183,29 @@ public class FileUploadService {
         fileUpload.setActiveInd(true);
         final FileUpload saved = fileUploadRepository.save(fileUpload);
 
-        queueThumbnailIfEligible(saved, originalContent);
+        queueThumbnail(saved, originalContent);
         return saved;
     }
 
     /**
-     * Queues a PENDING file_thumbnail row for image content types, per
-     * FileThumbnail's class Javadoc ("a FileUpload with no matching row
-     * here was never eligible for a thumbnail"), then registers an
-     * afterCommit() callback that hands off to
-     * ThumbnailGenerationService.generateThumbnailAsync() once the
-     * enclosing transaction actually commits. If the PENDING lookup row
-     * itself hasn't been seeded into lkp_thumbnail_status, this logs and
-     * skips rather than failing the upload over missing seed data
-     * unrelated to the file actually having been stored successfully.
+     * Queues a PENDING file_thumbnail row for EVERY upload -- not just
+     * images -- then registers an afterCommit() callback that hands off
+     * to ThumbnailGenerationService.generateThumbnailAsync() once the
+     * enclosing transaction actually commits. What generateThumbnailAsync()
+     * does with the row differs by format (a real preview for PDF/DOCX/
+     * image via thumbnails4j, a generated representative icon for
+     * anything else) -- see its class Javadoc -- but every upload ends up
+     * with exactly one file_thumbnail row, so callers never need to ask
+     * "does this file even get a thumbnail?"
+     *
+     * (Renamed from queueThumbnailIfEligible(): "if eligible" no longer
+     * describes this method now that unsupported formats are queued too,
+     * just handled differently once picked up.)
+     *
+     * If the PENDING lookup row itself hasn't been seeded into
+     * lkp_thumbnail_status, this logs and skips rather than failing the
+     * upload over missing seed data unrelated to the file actually having
+     * been stored successfully.
      *
      * originalContent is the SAME byte[] persist() received from the
      * upload request -- passed through rather than re-read here.
@@ -200,11 +219,7 @@ public class FileUploadService {
      * dispatch to the thumbnail-gen-* pool via generateThumbnailAsync()'s
      * own @Async, and nothing else.
      */
-    private void queueThumbnailIfEligible(final FileUpload fileUpload, final byte[] originalContent) {
-        if (fileUpload.getContentType() == null || !fileUpload.getContentType().startsWith("image/")) {
-            return;
-        }
-
+    private void queueThumbnail(final FileUpload fileUpload, final byte[] originalContent) {
         final Optional<LkpThumbnailStatus> pending = lkpThumbnailStatusRepository.findByCode(THUMBNAIL_PENDING_CODE);
         if (pending.isEmpty()) {
             log.warn("Skipping thumbnail queue for file_upload id={}: no '{}' row seeded in lkp_thumbnail_status",
@@ -234,6 +249,7 @@ public class FileUploadService {
                             fileUpload.getId(),
                             originalContent,
                             fileUpload.getContentType(),
+                            fileUpload.getFileName(),
                             fileUpload.getBlobContainer(),
                             new BlobUploadContext(fileUpload.getSourceApp(), fileUpload.getOwnerType(),
                                     fileUpload.getOwnerId(), fileUpload.getCompanyId()));
@@ -248,6 +264,7 @@ public class FileUploadService {
                     fileUpload.getId(),
                     originalContent,
                     fileUpload.getContentType(),
+                    fileUpload.getFileName(),
                     fileUpload.getBlobContainer(),
                     new BlobUploadContext(fileUpload.getSourceApp(), fileUpload.getOwnerType(),
                             fileUpload.getOwnerId(), fileUpload.getCompanyId()));
