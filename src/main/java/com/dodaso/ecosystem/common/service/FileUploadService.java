@@ -102,6 +102,16 @@ public class FileUploadService {
                 .collect(Collectors.toList());
     }
 
+    public List<FileUploadDTO> findByIds(final java.util.Set<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return List.of();
+        }
+        return fileUploadRepository.findAllById(ids).stream()
+                .filter(fileUpload -> Boolean.TRUE.equals(fileUpload.getActiveInd()))
+                .map(this::toDto)
+                .collect(Collectors.toList());
+    }
+
     public Optional<FileUploadDTO> findById(final Long id) {
         return fileUploadRepository.findById(id).map(this::toDto);
     }

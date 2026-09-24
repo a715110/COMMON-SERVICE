@@ -72,7 +72,7 @@ public class FileStorageController {
     @PostMapping(value = "/upload", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadDTOContainer uploadDTOContainer) {
         FileUploadRequestDTO request = uploadDTOContainer.getFileUploadRequestDTO();
-        
+
         final List<FileItemDTO> files = request.getFiles();
 
         final List<FileUploadRequest> requests = (files == null ? List.<FileItemDTO>of() : files).stream()
@@ -135,20 +135,30 @@ public class FileStorageController {
         return fileUploadService.findByOwner(companyId, ownerType, ownerId);
     }
 
-   @GetMapping("/{id}/download")
+    @PostMapping(value = "/batch", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<FileUploadDTOContainer> batch(@RequestBody final FileUploadDTOContainer requestContainer) {
+        final java.util.Set<Long> ids = requestContainer.getFileUploadIds();
+        final List<FileUploadDTO> found = fileUploadService.findByIds(ids);
+
+        final FileUploadDTOContainer responseContainer = new FileUploadDTOContainer();
+        responseContainer.setFileUploadDTOList(found);
+        return ResponseEntity.ok(responseContainer);
+    }
+
+    @GetMapping("/{id}/download")
     public ResponseEntity<byte[]> download(@PathVariable final Long id) {
         final FileUploadDTO fileUploadDTO = fileUploadService.findById(id)
-            .orElseThrow(() -> new IllegalArgumentException("No file_upload row for id=" + id));
+                .orElseThrow(() -> new IllegalArgumentException("No file_upload row for id=" + id));
         final byte[] content = fileUploadService.download(id);
 
         final MediaType mediaType = fileUploadDTO.getContentType() != null
-            ? MediaType.parseMediaType(fileUploadDTO.getContentType())
-            : MediaType.APPLICATION_OCTET_STREAM;
+                ? MediaType.parseMediaType(fileUploadDTO.getContentType())
+                : MediaType.APPLICATION_OCTET_STREAM;
 
         return ResponseEntity.ok()
-            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileUploadDTO.getFileName() + "\"")
-            .contentType(mediaType)
-            .body(content);
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileUploadDTO.getFileName() + "\"")
+                .contentType(mediaType)
+                .body(content);
     }
 
     /** Soft delete only -- see FileUploadService.softDelete() for why. */
