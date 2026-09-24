@@ -126,7 +126,7 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
         return containerClient;
     }
 
-    /** {companyId}/{sourceApp}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/{uuid}__
+    /** {companyId}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/{uuid}__
      * {originalFileName}, per the folder structure decided in chat --
      * companyId leads the path (see class Javadoc for why: it's the
      * actual tenant-isolation boundary, so it has to be the outermost
@@ -137,8 +137,8 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
      * that later needs to recover the original name from blobName alone. */
     private String buildBlobName(final String originalFileName, final BlobUploadContext context) {
         final java.time.LocalDate today = java.time.LocalDate.now();
-        return "%d/%s/%s/%d/%04d/%02d/%02d/%s__%s".formatted(
-            context.companyId(), context.sourceApp(), context.ownerType(), context.ownerId(),
+        return "%d/%s/%d/%04d/%02d/%02d/%s__%s".formatted(
+            context.companyId(), context.ownerType(), context.ownerId(),
             today.getYear(), today.getMonthValue(), today.getDayOfMonth(),
             UUID.randomUUID(), originalFileName);
     }
