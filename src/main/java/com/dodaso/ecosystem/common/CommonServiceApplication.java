@@ -1,6 +1,5 @@
 package com.dodaso.ecosystem.common;
 
-import com.ulisesbocchio.jasyptspringboot.annotation.EnableEncryptableProperties;
 import javax.sql.DataSource;
 import liquibase.integration.spring.SpringLiquibase;
 import org.springframework.boot.SpringApplication;
@@ -9,7 +8,6 @@ import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication(scanBasePackages = {"com.dodaso.ecosystem"})
-@EnableEncryptableProperties
 @EnableCaching
 public class CommonServiceApplication {
 

@@ -1,18 +1,22 @@
 package com.dodaso.ecosystem.common.service.handler;
 
-import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
 
+import com.azure.core.util.BinaryData;
+import com.azure.core.util.Context;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobHttpHeaders;
+import com.azure.storage.blob.options.BlobParallelUploadOptions;
 import com.dodaso.ecosystem.common.dto.BlobUploadContext;
 import com.dodaso.ecosystem.common.dto.BlobUploadResult;
 import com.dodaso.ecosystem.common.dto.FileUploadRequest;
@@ -22,49 +26,37 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Real Azure Blob Storage implementation of FileUploadDownloadHandler.
- * BlobServiceClient itself (account-name/account-key, endpoint) is
- * configured in AzureBlobConfig -- this class only does per-file
- * container/blob operations on top of it.
  *
- * Blob path convention and company tagging, per the container-naming
- * design decided in chat:
- *   - Path: {companyId}/{sourceApp}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/
- *     {uuid}__{originalFileName}. companyId leads the path (not the
- *     container, and not buried mid-path under sourceApp) because it's
- *     the actual tenant-isolation boundary: a SAS token or user-delegation
- *     SAS can be scoped to a path prefix, so "grant/restrict access to
- *     exactly one company's files" and "everything under this company"
- *     bulk operations (offboarding/purge) both reduce to a single prefix
- *     only when companyId is the outermost segment. Putting it after
- *     sourceApp would split one company's data across N app-prefixed
- *     subtrees instead of one.
- *   - Company scoping is NOT limited to the path, though -- every blob is
- *     also tagged (companyId, sourceApp, ownerType, ownerId) via Azure
- *     Blob Index Tags, indexed and queryable directly against Storage
- *     (BlobServiceClient.findBlobsByTags) independent of this service's
- *     own DB. Tags answer cross-cutting queries the path can't (e.g.
- *     "every ELCM file across ALL companies uploaded last week" isn't a
- *     single prefix once companyId leads the path); the path answers the
- *     isolation/bulk-deletion case tags can't do atomically. They're
- *     complementary, not redundant -- the DB (file_upload.company_id)
- *     remains the source of truth for the unified interface's own
- *     queries either way.
- *   - Date is split into {yyyy}/{MM}/{dd} rather than a flat {yyyyMMdd}
- *     token mainly for Storage Explorer/Portal browsability (renders as
- *     nested, drill-down folders rather than one flat token) and human
- *     readability next to the numeric {ownerId} segment -- not because
- *     flat dates can't prefix-match (a zero-padded flat date still would).
- *   - Container-per-company was considered and deliberately deferred, not
- *     rejected outright: it would buy atomic whole-container deletion
- *     (vs. enumerate-and-batch-delete under a path prefix), but adds real
- *     container-management overhead with no concrete driver yet (e.g. a
- *     contractual requirement for physically separate storage). Revisit
- *     if that shows up.
- *   - NOTE: Blob Index Tags require a general-purpose v2 (or premium
- *     block blob) storage account -- assumed true here since it's the
- *     modern default, but not verified against the real account in use;
- *     if tagging calls fail with an unsupported-feature error, that's
- *     the first thing to check.
+ * <p><b>Step 1 change (dedicated single-tenant / managed identity):</b>
+ * BlobServiceClient is now the bean auto-configured by
+ * spring-cloud-azure-starter-storage-blob. In the cloud it authenticates with the
+ * instance's managed identity (no account key anywhere); locally it uses
+ * spring.cloud.azure.storage.blob.connection-string. AzureBlobConfig is removed.
+ *
+ * <p><b>Required permission for the managed identity:</b> blob index tags
+ * (setTags / findBlobsByTags) are a separate sub-resource. The built-in
+ * "Storage Blob Data Contributor" role does NOT include
+ * .../blobs/tags/write, .../blobs/tags/read or .../blobs/filter/action.
+ * The identity needs either "Storage Blob Data Owner" (broader than necessary)
+ * or a custom role = Contributor data actions + those three tag actions.
+ * Recommended: the custom role, defined in the Step 6 environment template.
+ * Under the old account-key auth this never surfaced, because an account key
+ * implicitly has every permission.
+ *
+ * <p>Blob path (unchanged): {companyId}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/{uuid}__{originalFileName}.
+ * companyId leads the path so one prefix covers everything a company owns (prefix-scoped
+ * SAS, bulk offboarding/purge). sourceApp is carried as a blob index tag, not a path
+ * segment. The date is split into folders for Storage Explorer browsability; "__"
+ * separates the UUID from the original name because the UUID itself contains hyphens.
+ * Container-per-company remains deferred (no concrete driver yet).
+ *
+ * <p>In the dedicated model the storage account itself is the customer boundary;
+ * companyId still leads the path so a customer with several legal entities keeps
+ * one prefix per entity.
+ *
+ * <p>Tags (unchanged): companyId, sourceApp, ownerType, ownerId -- queryable via
+ * BlobServiceClient.findBlobsByTags. Requires a general-purpose v2 account without
+ * hierarchical namespace. file_upload.company_id in the DB stays the source of truth.
  */
 @Service
 @RequiredArgsConstructor
@@ -73,9 +65,14 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
 
     private final BlobServiceClient blobServiceClient;
 
+    /** Containers already confirmed to exist in this JVM -- avoids an exists()
+     *  round trip on every upload. Containers are normally pre-created by the
+     *  environment template; create-if-missing stays as a fallback. */
+    private final Set<String> verifiedContainers = ConcurrentHashMap.newKeySet();
+
     @Override
     public List<BlobUploadResult> uploadFiles(final List<FileUploadRequest> files, final String containerName,
-                                               final BlobUploadContext context) {
+        final BlobUploadContext context) {
         final BlobContainerClient containerClient = getOrCreateContainer(containerName);
         final List<BlobUploadResult> results = new ArrayList<>(files.size());
         final Map<String, String> tags = buildTags(context);
@@ -84,11 +81,17 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
             final String blobName = buildBlobName(file.getFileName(), context);
             final BlobClient blobClient = containerClient.getBlobClient(blobName);
 
-            blobClient.upload(new ByteArrayInputStream(file.getContent()), file.getContent().length, true);
+            // One request instead of three (upload + setHttpHeaders + setTags):
+            // the blob is never visible without its tags or content type, and a
+            // failure can't leave an untagged blob behind. No request conditions
+            // => overwrite semantics, same as the previous upload(..., true).
+            final BlobParallelUploadOptions options =
+                new BlobParallelUploadOptions(BinaryData.fromBytes(file.getContent()))
+                    .setTags(tags);
             if (file.getContentType() != null) {
-                blobClient.setHttpHeaders(new BlobHttpHeaders().setContentType(file.getContentType()));
+                options.setHeaders(new BlobHttpHeaders().setContentType(file.getContentType()));
             }
-            blobClient.setTags(tags);
+            blobClient.uploadWithResponse(options, null, Context.NONE);
 
             log.info("Uploaded {} ({} bytes) to container {} as blob {} (tags={})",
                 file.getFileName(), file.getContent().length, containerName, blobName, tags);
@@ -97,7 +100,7 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
                 file.getFileName(),
                 blobName,
                 containerName,
-                blobClient.getBlobUrl(),
+                blobClient.getBlobUrl(),   // Step 4: do not persist this -- see note below
                 file.getContent().length,
                 file.getContentType()));
         }
@@ -119,22 +122,18 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
 
     private BlobContainerClient getOrCreateContainer(final String containerName) {
         final BlobContainerClient containerClient = blobServiceClient.getBlobContainerClient(containerName);
-        if (!containerClient.exists()) {
-            log.info("Container {} does not exist yet -- creating it", containerName);
-            containerClient.create();
+        if (verifiedContainers.contains(containerName)) {
+            return containerClient;
         }
+        if (containerClient.createIfNotExists()) {
+            log.warn("Container {} did not exist and was created at runtime -- "
+                + "it should be provisioned by the environment template", containerName);
+        }
+        verifiedContainers.add(containerName);
         return containerClient;
     }
 
-    /** {companyId}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/{uuid}__
-     * {originalFileName}, per the folder structure decided in chat --
-     * companyId leads the path (see class Javadoc for why: it's the
-     * actual tenant-isolation boundary, so it has to be the outermost
-     * segment for prefix-scoped SAS/bulk-deletion to work against a
-     * single prefix). "__" (not "-") separates the UUID from the
-     * original file name -- a UUID's own hyphens (8-4-4-4-12) would
-     * otherwise make "first dash" an ambiguous split point for anything
-     * that later needs to recover the original name from blobName alone. */
+    /** Unchanged: {companyId}/{ownerType}/{ownerId}/{yyyy}/{MM}/{dd}/{uuid}__{originalFileName}. */
     private String buildBlobName(final String originalFileName, final BlobUploadContext context) {
         final java.time.LocalDate today = java.time.LocalDate.now();
         return "%d/%s/%d/%04d/%02d/%02d/%s__%s".formatted(
@@ -143,10 +142,7 @@ public class AzureBlobStorageHandler implements FileUploadDownloadHandler {
             UUID.randomUUID(), originalFileName);
     }
 
-    /** Azure Blob Index Tags: plain string key/value pairs, indexed and
-     * queryable service-side. Max 10 tags/blob, key <=128 chars, value
-     * <=256 chars -- comfortably within that here. All values must be
-     * strings, hence the manual toString() on the numeric ids. */
+    /** Unchanged: Azure Blob Index Tags (max 10/blob; all values strings). */
     private Map<String, String> buildTags(final BlobUploadContext context) {
         final Map<String, String> tags = new HashMap<>();
         tags.put("companyId", String.valueOf(context.companyId()));
