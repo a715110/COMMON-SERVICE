@@ -141,6 +141,9 @@ public class FileUploadService {
      * check back or show the failure", and COMPLETED means
      * downloadThumbnail() below will return bytes.
      */
+    // Transaction keeps the session open while toThumbnailDto() reads the LAZY fileUpload/status
+    // (open-in-view is off); without it this threw LazyInitializationException -> 500.
+    @Transactional(readOnly = true)
     public Optional<FileThumbnailDTO> getThumbnailStatus(final Long fileUploadId) {
         return fileThumbnailRepository.findByFileUpload_Id(fileUploadId).map(this::toThumbnailDto);
     }
@@ -152,6 +155,7 @@ public class FileUploadService {
      * all three are the same "not available right now" case to a caller;
      * getThumbnailStatus() is how a caller distinguishes them.
      */
+    @Transactional(readOnly = true) // reads the LAZY status, same as getThumbnailStatus()
     public Optional<byte[]> downloadThumbnail(final Long fileUploadId) {
         return fileThumbnailRepository.findByFileUpload_Id(fileUploadId)
                 .filter(thumbnail -> thumbnail.getStatus() != null
