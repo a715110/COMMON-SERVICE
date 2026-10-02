@@ -17,10 +17,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.dodaso.ecosystem.common.container.FileUploadDTOContainer;
+import com.dodaso.ecosystem.common.dto.DocumentConversionDTO;
 import com.dodaso.ecosystem.common.dto.FileItemDTO;
 import com.dodaso.ecosystem.common.dto.FileThumbnailDTO;
 import com.dodaso.ecosystem.common.dto.FileUploadDTO;
-import com.dodaso.ecosystem.common.dto.FileUploadRequest;
+import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 import com.dodaso.ecosystem.common.dto.FileUploadRequestDTO;
 import com.dodaso.ecosystem.common.service.FileUploadService;
 
@@ -219,6 +220,44 @@ public class FileStorageController {
 
         return fileUploadService.downloadThumbnail(id)
                 .map(content -> ResponseEntity.ok().contentType(MediaType.IMAGE_PNG).body(content))
+                .orElseGet(() -> ResponseEntity.accepted().build());
+    }
+
+    /**
+     * Metadata for the Gotenberg conversion belonging to file_upload id --
+     * status code (PENDING/PROCESSING/COMPLETED/FAILED), timestamps,
+     * lastErrorMessage on failure. 404 means the file was never eligible
+     * for conversion at all (e.g. it's a PDF or image, or predates this
+     * feature) -- there is no document_conversion row to report on, and
+     * the UI should treat that the same as "no office-document conversion
+     * applies here", not as a transient/polling condition.
+     */
+    @GetMapping("/{id}/conversion/status")
+    public ResponseEntity<DocumentConversionDTO> conversionStatus(@PathVariable final Long id) {
+        return fileUploadService.getConversionStatus(id)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Streams the converted PDF for a file_upload row. Returns 404 if the
+     * file was never eligible for conversion, and 202 (Accepted, no body)
+     * if conversion is still PENDING/PROCESSING or previously FAILED --
+     * same "not ready yet, check status first" contract as GET
+     * /{id}/thumbnail.
+     */
+    @GetMapping("/{id}/conversion")
+    public ResponseEntity<byte[]> conversion(@PathVariable final Long id) {
+        final Optional<DocumentConversionDTO> statusDto = fileUploadService.getConversionStatus(id);
+        if (statusDto.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return fileUploadService.downloadConvertedPdf(id)
+                .map(content -> ResponseEntity.ok()
+                        .contentType(MediaType.APPLICATION_PDF)
+                        .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"converted.pdf\"")
+                        .body(content))
                 .orElseGet(() -> ResponseEntity.accepted().build());
     }
 

@@ -10,7 +10,7 @@ import com.dodaso.ecosystem.common.entity.FileThumbnail;
 import com.dodaso.ecosystem.common.entity.LkpThumbnailStatus;
 import com.dodaso.ecosystem.common.repository.FileThumbnailRepository;
 import com.dodaso.ecosystem.common.repository.LkpThumbnailStatusRepository;
-import com.dodaso.ecosystem.common.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

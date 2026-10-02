@@ -17,9 +17,9 @@ import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobHttpHeaders;
 import com.azure.storage.blob.options.BlobParallelUploadOptions;
-import com.dodaso.ecosystem.common.dto.BlobUploadContext;
-import com.dodaso.ecosystem.common.dto.BlobUploadResult;
-import com.dodaso.ecosystem.common.dto.FileUploadRequest;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadContext;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

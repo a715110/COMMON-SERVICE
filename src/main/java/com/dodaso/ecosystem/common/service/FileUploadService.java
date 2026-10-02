@@ -12,17 +12,23 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import com.dodaso.ecosystem.common.dto.BlobUploadContext;
-import com.dodaso.ecosystem.common.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadContext;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.dto.DocumentConversionDTO;
 import com.dodaso.ecosystem.common.dto.FileThumbnailDTO;
 import com.dodaso.ecosystem.common.dto.FileUploadDTO;
-import com.dodaso.ecosystem.common.dto.FileUploadRequest;
+import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
+import com.dodaso.ecosystem.common.dto.LkpDocumentConversionStatusDTO;
 import com.dodaso.ecosystem.common.dto.LkpThumbnailStatusDTO;
+import com.dodaso.ecosystem.common.entity.DocumentConversion;
 import com.dodaso.ecosystem.common.entity.FileThumbnail;
 import com.dodaso.ecosystem.common.entity.FileUpload;
+import com.dodaso.ecosystem.common.entity.LkpDocumentConversionStatus;
 import com.dodaso.ecosystem.common.entity.LkpThumbnailStatus;
+import com.dodaso.ecosystem.common.repository.DocumentConversionRepository;
 import com.dodaso.ecosystem.common.repository.FileThumbnailRepository;
 import com.dodaso.ecosystem.common.repository.FileUploadRepository;
+import com.dodaso.ecosystem.common.repository.LkpDocumentConversionStatusRepository;
 import com.dodaso.ecosystem.common.repository.LkpThumbnailStatusRepository;
 import com.dodaso.ecosystem.common.service.handler.FileUploadDownloadHandler;
 
@@ -64,12 +70,16 @@ import lombok.extern.slf4j.Slf4j;
 public class FileUploadService {
 
     private static final String THUMBNAIL_PENDING_CODE = "PENDING";
+    private static final String CONVERSION_PENDING_CODE = "PENDING";
 
     private final FileUploadDownloadHandler fileUploadDownloadHandler;
     private final FileUploadRepository fileUploadRepository;
     private final FileThumbnailRepository fileThumbnailRepository;
     private final LkpThumbnailStatusRepository lkpThumbnailStatusRepository;
     private final ThumbnailGenerationService thumbnailGenerationService;
+    private final DocumentConversionRepository documentConversionRepository;
+    private final LkpDocumentConversionStatusRepository lkpDocumentConversionStatusRepository;
+    private final DocumentConversionService documentConversionService;
 
     @Value("${azure.storage.default-container-name:documents}")
     private String defaultContainerName;
@@ -85,7 +95,7 @@ public class FileUploadService {
                 ? containerName
                 : defaultContainerName;
 
-        final BlobUploadContext context = new BlobUploadContext(sourceApp, ownerType, ownerId, companyId);
+        final BlobUploadContext context = new BlobUploadContext(companyId, sourceApp, ownerType, ownerId);
         final List<BlobUploadResult> blobResults = fileUploadDownloadHandler.uploadFiles(files, resolvedContainer,
                 context);
 
@@ -198,6 +208,7 @@ public class FileUploadService {
         final FileUpload saved = fileUploadRepository.save(fileUpload);
 
         queueThumbnail(saved, originalContent);
+        queueDocumentConversion(saved, originalContent);
         return saved;
     }
 
@@ -265,8 +276,8 @@ public class FileUploadService {
                             fileUpload.getContentType(),
                             fileUpload.getFileName(),
                             fileUpload.getBlobContainer(),
-                            new BlobUploadContext(fileUpload.getSourceApp(), fileUpload.getOwnerType(),
-                                    fileUpload.getOwnerId(), fileUpload.getCompanyId()));
+                            new BlobUploadContext(fileUpload.getCompanyId(), fileUpload.getSourceApp(),
+                                    fileUpload.getOwnerType(), fileUpload.getOwnerId()));
                 }
             });
         } else {
@@ -280,9 +291,136 @@ public class FileUploadService {
                     fileUpload.getContentType(),
                     fileUpload.getFileName(),
                     fileUpload.getBlobContainer(),
-                    new BlobUploadContext(fileUpload.getSourceApp(), fileUpload.getOwnerType(),
-                            fileUpload.getOwnerId(), fileUpload.getCompanyId()));
+                    new BlobUploadContext(fileUpload.getCompanyId(), fileUpload.getSourceApp(),
+                            fileUpload.getOwnerType(), fileUpload.getOwnerId()));
         }
+    }
+
+    /**
+     * Queues a PENDING document_conversion row ONLY for uploads
+     * DocumentConversionEligibility judges eligible (office formats a
+     * browser can't render natively) -- unlike queueThumbnail(), which
+     * queues unconditionally for every upload. A PDF/image/anything else
+     * ineligible gets no row here at all; getConversionStatus() below
+     * returns empty for those, same meaning as "never eligible".
+     *
+     * Same afterCommit()/@Async handoff shape as queueThumbnail() -- see
+     * its Javadoc for why originalContent is threaded through rather than
+     * re-downloaded, and why the callback only dispatches and does
+     * nothing else.
+     */
+    private void queueDocumentConversion(final FileUpload fileUpload, final byte[] originalContent) {
+        if (!DocumentConversionEligibility.isEligible(fileUpload.getContentType(), fileUpload.getFileName())) {
+            return;
+        }
+
+        final Optional<LkpDocumentConversionStatus> pending =
+                lkpDocumentConversionStatusRepository.findByCode(CONVERSION_PENDING_CODE);
+        if (pending.isEmpty()) {
+            log.warn("Skipping document conversion queue for file_upload id={}: no '{}' row seeded in "
+                    + "lkp_document_conversion_status", fileUpload.getId(), CONVERSION_PENDING_CODE);
+            return;
+        }
+
+        final DocumentConversion conversion = new DocumentConversion();
+        conversion.setFileUpload(fileUpload);
+        conversion.setStatus(pending.get());
+        conversion.setAttemptCount(0);
+        conversion.setRequestedAt(LocalDateTime.now());
+        final DocumentConversion savedConversion = documentConversionRepository.save(conversion);
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    documentConversionService.convertToPdfAsync(
+                            savedConversion.getId(),
+                            fileUpload.getId(),
+                            originalContent,
+                            fileUpload.getFileName(),
+                            fileUpload.getBlobContainer(),
+                            new BlobUploadContext(fileUpload.getCompanyId(), fileUpload.getSourceApp(),
+                                    fileUpload.getOwnerType(), fileUpload.getOwnerId()));
+                }
+            });
+        } else {
+            documentConversionService.convertToPdfAsync(
+                    savedConversion.getId(),
+                    fileUpload.getId(),
+                    originalContent,
+                    fileUpload.getFileName(),
+                    fileUpload.getBlobContainer(),
+                    new BlobUploadContext(fileUpload.getCompanyId(), fileUpload.getSourceApp(),
+                            fileUpload.getOwnerType(), fileUpload.getOwnerId()));
+        }
+    }
+
+    /**
+     * Metadata for the document_conversion row belonging to a file_upload
+     * row, if one exists -- empty means the file was never eligible for
+     * conversion (e.g. it's already a PDF/image, or predates this
+     * feature), which the UI should treat the same as "no preview
+     * conversion applies here", not as an error.
+     */
+    @Transactional(readOnly = true)
+    public Optional<DocumentConversionDTO> getConversionStatus(final Long fileUploadId) {
+        return documentConversionRepository.findByFileUpload_Id(fileUploadId).map(this::toConversionDto);
+    }
+
+    /**
+     * Converted PDF bytes for a file_upload row, if -- and only if --
+     * conversion has reached COMPLETED. Same "empty, never throws" shape
+     * as downloadThumbnail() -- getConversionStatus() is how a caller
+     * tells "no row"/"still working"/"failed" apart from "ready".
+     */
+    @Transactional(readOnly = true)
+    public Optional<byte[]> downloadConvertedPdf(final Long fileUploadId) {
+        return documentConversionRepository.findByFileUpload_Id(fileUploadId)
+                .filter(conversion -> conversion.getStatus() != null
+                        && DocumentConversionService.CONVERSION_COMPLETED_CODE.equals(conversion.getStatus().getCode())
+                        && conversion.getBlobPath() != null)
+                .map(conversion -> fileUploadDownloadHandler.downloadFile(conversion.getBlobContainer(),
+                        conversion.getBlobPath()));
+    }
+
+    private DocumentConversionDTO toConversionDto(final DocumentConversion entity) {
+        final DocumentConversionDTO dto = new DocumentConversionDTO();
+        dto.setId(entity.getId());
+        if (entity.getFileUpload() != null) {
+            dto.setFileUploadDTO(toDto(entity.getFileUpload()));
+        }
+        if (entity.getStatus() != null) {
+            dto.setStatusDTO(toConversionStatusDto(entity.getStatus()));
+        }
+        dto.setBlobContainer(entity.getBlobContainer());
+        dto.setBlobPath(entity.getBlobPath());
+        dto.setBlobUrl(entity.getBlobUrl());
+        dto.setPageCount(entity.getPageCount());
+        dto.setAttemptCount(entity.getAttemptCount());
+        dto.setLastErrorMessage(entity.getLastErrorMessage());
+        dto.setRequestedAt(entity.getRequestedAt());
+        dto.setStartedAt(entity.getStartedAt());
+        dto.setCompletedAt(entity.getCompletedAt());
+        dto.setCreatedBy(entity.getCreatedBy());
+        dto.setCreatedAt(entity.getCreatedAt());
+        dto.setUpdatedBy(entity.getUpdatedBy());
+        dto.setUpdatedAt(entity.getUpdatedAt());
+        return dto;
+    }
+
+    private LkpDocumentConversionStatusDTO toConversionStatusDto(final LkpDocumentConversionStatus entity) {
+        final LkpDocumentConversionStatusDTO dto = new LkpDocumentConversionStatusDTO();
+        dto.setId(entity.getId());
+        dto.setCode(entity.getCode());
+        dto.setLabel(entity.getLabel());
+        dto.setDescription(entity.getDescription());
+        dto.setSortOrder(entity.getSortOrder());
+        dto.setIsActive(entity.getIsActive());
+        dto.setCreatedBy(entity.getCreatedBy());
+        dto.setCreatedAt(entity.getCreatedAt());
+        dto.setUpdatedBy(entity.getUpdatedBy());
+        dto.setUpdatedAt(entity.getUpdatedAt());
+        return dto;
     }
 
     private FileUploadDTO toDto(final FileUpload entity) {

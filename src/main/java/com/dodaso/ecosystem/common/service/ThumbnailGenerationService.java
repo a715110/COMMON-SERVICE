@@ -10,9 +10,9 @@ import javax.imageio.ImageIO;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import com.dodaso.ecosystem.common.dto.BlobUploadContext;
-import com.dodaso.ecosystem.common.dto.BlobUploadResult;
-import com.dodaso.ecosystem.common.dto.FileUploadRequest;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadContext;
+import com.dodaso.ecosystem.common.service.dto.BlobUploadResult;
+import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 import com.dodaso.ecosystem.common.service.handler.FileUploadDownloadHandler;
 
 import lombok.RequiredArgsConstructor;
