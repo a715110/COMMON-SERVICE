@@ -145,8 +145,19 @@ public class FileStorageController {
         return ResponseEntity.ok(responseContainer);
     }
 
+    /**
+     * REVISED 2026-10-01 -- added the optional "inline" param for the ELCM
+     * Stage Documents dashboard's new file-preview feature (the eye icon):
+     * elcm-ui's DocumentPreviewController proxies this endpoint and needs
+     * Content-Disposition: inline so a browser renders a PDF/image straight
+     * in an <iframe>/<embed> instead of popping a save-as dialog. Defaults
+     * to false (the original "attachment" behavior) so every existing
+     * caller of this endpoint is completely unaffected -- this is additive,
+     * not a behavior change.
+     */
     @GetMapping("/{id}/download")
-    public ResponseEntity<byte[]> download(@PathVariable final Long id) {
+    public ResponseEntity<byte[]> download(@PathVariable final Long id,
+            @RequestParam(required = false, defaultValue = "false") final boolean inline) {
         final FileUploadDTO fileUploadDTO = fileUploadService.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("No file_upload row for id=" + id));
         final byte[] content = fileUploadService.download(id);
@@ -155,8 +166,10 @@ public class FileStorageController {
                 ? MediaType.parseMediaType(fileUploadDTO.getContentType())
                 : MediaType.APPLICATION_OCTET_STREAM;
 
+        final String dispositionType = inline ? "inline" : "attachment";
+
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileUploadDTO.getFileName() + "\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, dispositionType + "; filename=\"" + fileUploadDTO.getFileName() + "\"")
                 .contentType(mediaType)
                 .body(content);
     }
