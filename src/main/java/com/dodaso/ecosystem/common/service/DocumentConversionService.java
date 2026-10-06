@@ -2,6 +2,7 @@ package com.dodaso.ecosystem.common.service;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -54,14 +55,29 @@ public class DocumentConversionService {
     private final FileUploadDownloadHandler fileUploadDownloadHandler;
     private final GotenbergClient gotenbergClient;
 
+    /** Total tries per conversion (first attempt included) for transient Gotenberg errors. */
+    @Value("${gotenberg.retry.max-attempts:3}")
+    private int maxAttempts;
+
+    @Value("${gotenberg.retry.initial-backoff-ms:2000}")
+    private long initialBackoffMs;
+
+    @Value("${gotenberg.retry.backoff-multiplier:2.0}")
+    private double backoffMultiplier;
+
     @Async(com.dodaso.ecosystem.common.config.DocumentConversionAsyncConfig.DOCUMENT_CONVERSION_EXECUTOR_BEAN)
     public void convertToPdfAsync(final Long conversionId, final Long fileUploadId, final byte[] originalContent,
                                    final String fileName, final String sourceContainer,
                                    final BlobUploadContext context) {
         try {
-            documentConversionStatusUpdater.markStarted(conversionId);
-
-            final byte[] pdfBytes = gotenbergClient.convertToPdf(fileName, originalContent);
+            // Each attempt marks the row PROCESSING and bumps attempt_count. Only
+            // transient errors (container down or restarting, 5xx, timeout) are
+            // retried; a file Gotenberg rejects outright fails at once.
+            final byte[] pdfBytes = GotenbergRetry.execute(
+                () -> gotenbergClient.convertToPdf(fileName, originalContent),
+                () -> documentConversionStatusUpdater.markStarted(conversionId),
+                maxAttempts, initialBackoffMs, backoffMultiplier,
+                GotenbergClient::isTransient, Thread::sleep);
 
             final FileUploadRequest pdfRequest = new FileUploadRequest(
                 "converted_" + conversionId + ".pdf", "application/pdf", pdfBytes);

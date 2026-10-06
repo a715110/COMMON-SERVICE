@@ -240,6 +240,23 @@ public class FileStorageController {
     }
 
     /**
+     * Re-queues a failed conversion. 202 with the refreshed status when queued, 404 if
+     * the file never had a conversion row, 409 if the conversion is not in a state that
+     * can be retried (still running, already completed, or already re-queued).
+     */
+    @PostMapping("/{id}/conversion/retry")
+    public ResponseEntity<DocumentConversionDTO> retryConversion(@PathVariable final Long id) {
+        final FileUploadService.RetryOutcome outcome = fileUploadService.retryConversion(id);
+        return switch (outcome) {
+            case NOT_FOUND -> ResponseEntity.notFound().build();
+            case NOT_RETRYABLE -> ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).build();
+            case QUEUED -> fileUploadService.getConversionStatus(id)
+                    .map(dto -> ResponseEntity.accepted().body(dto))
+                    .orElseGet(() -> ResponseEntity.accepted().build());
+        };
+    }
+
+    /**
      * Streams the converted PDF for a file_upload row. Returns 404 if the
      * file was never eligible for conversion, and 202 (Accepted, no body)
      * if conversion is still PENDING/PROCESSING or previously FAILED --

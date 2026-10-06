@@ -43,8 +43,27 @@ public class DocumentConversionStatusUpdater {
             return;
         }
         conversion.setStatus(requireStatus(DocumentConversionService.CONVERSION_PROCESSING_CODE));
-        conversion.setStartedAt(LocalDateTime.now());
+        conversion.setStartedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+        conversion.setCompletedAt(null);
         conversion.setAttemptCount(conversion.getAttemptCount() == null ? 1 : conversion.getAttemptCount() + 1);
+        documentConversionRepository.save(conversion);
+    }
+
+    /**
+     * Puts a FAILED (or abandoned PROCESSING) row back to PENDING for a user-requested
+     * retry. attempt_count is kept, so it stays a running total across retries.
+     */
+    @Transactional
+    public void markPending(final Long conversionId) {
+        final DocumentConversion conversion = documentConversionRepository.findById(conversionId).orElse(null);
+        if (conversion == null) {
+            log.warn("document_conversion id={} disappeared before it could be re-queued", conversionId);
+            return;
+        }
+        conversion.setStatus(requireStatus("PENDING"));
+        conversion.setRequestedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+        conversion.setStartedAt(null);
+        conversion.setCompletedAt(null);
         documentConversionRepository.save(conversion);
     }
 
@@ -59,7 +78,7 @@ public class DocumentConversionStatusUpdater {
         conversion.setBlobContainer(pdfBlob.blobContainer());
         conversion.setBlobPath(pdfBlob.blobPath());
         conversion.setBlobUrl(pdfBlob.blobUrl());
-        conversion.setCompletedAt(LocalDateTime.now());
+        conversion.setCompletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         conversion.setLastErrorMessage(null);
         documentConversionRepository.save(conversion);
     }
@@ -75,7 +94,7 @@ public class DocumentConversionStatusUpdater {
         final String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
         conversion.setLastErrorMessage(
                 message.length() > MAX_ERROR_MESSAGE_LENGTH ? message.substring(0, MAX_ERROR_MESSAGE_LENGTH) : message);
-        conversion.setCompletedAt(LocalDateTime.now());
+        conversion.setCompletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         documentConversionRepository.save(conversion);
     }
 

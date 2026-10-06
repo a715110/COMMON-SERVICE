@@ -80,6 +80,11 @@ public class FileUploadService {
     private final DocumentConversionRepository documentConversionRepository;
     private final LkpDocumentConversionStatusRepository lkpDocumentConversionStatusRepository;
     private final DocumentConversionService documentConversionService;
+    private final DocumentConversionStatusUpdater documentConversionStatusUpdater;
+
+    /** A PROCESSING row older than this is treated as abandoned (for example the service restarted mid-job). */
+    @Value("${gotenberg.stale-processing-minutes:15}")
+    private long staleProcessingMinutes;
 
     @Value("${azure.storage.default-container-name:documents}")
     private String defaultContainerName;
@@ -256,7 +261,7 @@ public class FileUploadService {
         thumbnail.setFileUpload(fileUpload);
         thumbnail.setStatus(pending.get());
         thumbnail.setAttemptCount(0);
-        thumbnail.setRequestedAt(LocalDateTime.now());
+        thumbnail.setRequestedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         final FileThumbnail savedThumbnail = fileThumbnailRepository.save(thumbnail);
 
         // Register callback to trigger async thumbnail generation AFTER main DB
@@ -326,7 +331,7 @@ public class FileUploadService {
         conversion.setFileUpload(fileUpload);
         conversion.setStatus(pending.get());
         conversion.setAttemptCount(0);
-        conversion.setRequestedAt(LocalDateTime.now());
+        conversion.setRequestedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         final DocumentConversion savedConversion = documentConversionRepository.save(conversion);
 
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
@@ -381,6 +386,65 @@ public class FileUploadService {
                         && conversion.getBlobPath() != null)
                 .map(conversion -> fileUploadDownloadHandler.downloadFile(conversion.getBlobContainer(),
                         conversion.getBlobPath()));
+    }
+
+    /** Result of a retry request, mapped to an HTTP status by the controller. */
+    public enum RetryOutcome { NOT_FOUND, NOT_RETRYABLE, QUEUED }
+
+    /**
+     * User-requested retry of a conversion. Allowed only for a FAILED row, or a
+     * PROCESSING row that has been running longer than staleProcessingMinutes (its
+     * job is gone). Anything else (PENDING, a live PROCESSING, COMPLETED) is not
+     * retryable, which also stops a double click from queuing the same file twice.
+     *
+     * Unlike the upload path, the original bytes are not in memory here, so they
+     * are fetched from blob storage before the job is dispatched after commit.
+     */
+    @Transactional
+    public RetryOutcome retryConversion(final Long fileUploadId) {
+        final Optional<DocumentConversion> found = documentConversionRepository.findByFileUpload_Id(fileUploadId);
+        if (found.isEmpty()) {
+            return RetryOutcome.NOT_FOUND;
+        }
+        final DocumentConversion conversion = found.get();
+        if (!isRetryable(conversion)) {
+            return RetryOutcome.NOT_RETRYABLE;
+        }
+        final FileUpload fileUpload = conversion.getFileUpload();
+        final byte[] originalContent =
+                fileUploadDownloadHandler.downloadFile(fileUpload.getBlobContainer(), fileUpload.getBlobPath());
+        documentConversionStatusUpdater.markPending(conversion.getId());
+
+        final Long conversionId = conversion.getId();
+        final BlobUploadContext context = new BlobUploadContext(fileUpload.getCompanyId(), fileUpload.getSourceApp(),
+                fileUpload.getOwnerType(), fileUpload.getOwnerId());
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    documentConversionService.convertToPdfAsync(conversionId, fileUpload.getId(), originalContent,
+                            fileUpload.getFileName(), fileUpload.getBlobContainer(), context);
+                }
+            });
+        } else {
+            documentConversionService.convertToPdfAsync(conversionId, fileUpload.getId(), originalContent,
+                    fileUpload.getFileName(), fileUpload.getBlobContainer(), context);
+        }
+        log.info("Queued retry of document conversion id={} for file_upload id={}", conversionId, fileUploadId);
+        return RetryOutcome.QUEUED;
+    }
+
+    private boolean isRetryable(final DocumentConversion conversion) {
+        if (conversion.getStatus() == null) {
+            return false;
+        }
+        final String code = conversion.getStatus().getCode();
+        if (DocumentConversionService.CONVERSION_FAILED_CODE.equals(code)) {
+            return true;
+        }
+        return DocumentConversionService.CONVERSION_PROCESSING_CODE.equals(code)
+                && conversion.getStartedAt() != null
+                && conversion.getStartedAt().isBefore(LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(staleProcessingMinutes));
     }
 
     private DocumentConversionDTO toConversionDto(final DocumentConversion entity) {

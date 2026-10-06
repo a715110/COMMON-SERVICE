@@ -44,7 +44,7 @@ public class ThumbnailStatusUpdater {
             return;
         }
         thumbnail.setStatus(requireStatus(ThumbnailGenerationService.THUMBNAIL_PROCESSING_CODE));
-        thumbnail.setStartedAt(LocalDateTime.now());
+        thumbnail.setStartedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         thumbnail.setAttemptCount(thumbnail.getAttemptCount() == null ? 1 : thumbnail.getAttemptCount() + 1);
         fileThumbnailRepository.save(thumbnail);
     }
@@ -63,7 +63,7 @@ public class ThumbnailStatusUpdater {
         thumbnail.setBlobUrl(thumbnailBlob.blobUrl());
         thumbnail.setWidthPx(widthPx);
         thumbnail.setHeightPx(heightPx);
-        thumbnail.setCompletedAt(LocalDateTime.now());
+        thumbnail.setCompletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         thumbnail.setLastErrorMessage(null);
         fileThumbnailRepository.save(thumbnail);
     }
@@ -79,7 +79,7 @@ public class ThumbnailStatusUpdater {
         final String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
         thumbnail.setLastErrorMessage(
                 message.length() > MAX_ERROR_MESSAGE_LENGTH ? message.substring(0, MAX_ERROR_MESSAGE_LENGTH) : message);
-        thumbnail.setCompletedAt(LocalDateTime.now());
+        thumbnail.setCompletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         fileThumbnailRepository.save(thumbnail);
     }
 
