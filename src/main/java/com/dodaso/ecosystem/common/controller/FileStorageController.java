@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import com.dodaso.ecosystem.common.security.CommonPermission;
+import com.dodaso.ecosystem.common.security.RequiresPermission;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -57,6 +59,7 @@ import lombok.extern.slf4j.Slf4j;
  */
 @RestController
 @RequestMapping("/api/v1/files")
+@RequiresPermission(CommonPermission.FILE_VIEW)
 @RequiredArgsConstructor
 @Slf4j
 public class FileStorageController {
@@ -70,6 +73,7 @@ public class FileStorageController {
      * for this record" query (GET /owner) find them again, and what get
      * set as this blob's Azure Blob Index Tags.
      */
+    @RequiresPermission(CommonPermission.FILE_UPLOAD)
     @PostMapping(value = "/upload", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<FileUploadDTOContainer> upload(@RequestBody final FileUploadDTOContainer uploadDTOContainer) {
         FileUploadRequestDTO request = uploadDTOContainer.getFileUploadRequestDTO();
@@ -176,6 +180,7 @@ public class FileStorageController {
     }
 
     /** Soft delete only -- see FileUploadService.softDelete() for why. */
+    @RequiresPermission(CommonPermission.FILE_DELETE)
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable final Long id) {
         fileUploadService.softDelete(id);
@@ -244,6 +249,7 @@ public class FileStorageController {
      * the file never had a conversion row, 409 if the conversion is not in a state that
      * can be retried (still running, already completed, or already re-queued).
      */
+    @RequiresPermission(CommonPermission.FILE_UPLOAD)
     @PostMapping("/{id}/conversion/retry")
     public ResponseEntity<DocumentConversionDTO> retryConversion(@PathVariable final Long id) {
         final FileUploadService.RetryOutcome outcome = fileUploadService.retryConversion(id);
