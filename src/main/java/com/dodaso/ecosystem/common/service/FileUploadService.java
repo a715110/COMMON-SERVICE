@@ -100,9 +100,11 @@ public class FileUploadService {
                 ? containerName
                 : defaultContainerName;
 
+        final long perfStart = System.nanoTime(); // ADDED 2026-10-20 TEMPORARY timing, remove after the slow comment upload is fixed
         final BlobUploadContext context = new BlobUploadContext(companyId, sourceApp, ownerType, ownerId);
         final List<BlobUploadResult> blobResults = fileUploadDownloadHandler.uploadFiles(files, resolvedContainer,
                 context);
+        final long perfBlob = System.nanoTime();
 
         // Zipped by index rather than mapped independently: persist() needs each
         // blob's ORIGINAL bytes (still held here in `files`) to hand off to
@@ -110,11 +112,14 @@ public class FileUploadService {
         // see queueThumbnail()'s Javadoc. This relies on
         // FileUploadDownloadHandler.uploadFiles() returning results in the same
         // order as the input list, which is part of its documented contract.
-        return IntStream.range(0, blobResults.size())
+        final List<FileUploadDTO> perfResult = IntStream.range(0, blobResults.size())
                 .mapToObj(i -> persist(blobResults.get(i), files.get(i).getContent(), sourceApp, ownerType, ownerId,
                         companyId))
                 .map(this::toDto)
                 .collect(Collectors.toList());
+        log.info("PERF-UPLOAD blob={}ms database={}ms total={}ms ({} file(s))", (perfBlob - perfStart) / 1_000_000,
+                (System.nanoTime() - perfBlob) / 1_000_000, (System.nanoTime() - perfStart) / 1_000_000, files.size());
+        return perfResult;
     }
 
     public List<FileUploadDTO> findByIds(final java.util.Set<Long> ids) {
