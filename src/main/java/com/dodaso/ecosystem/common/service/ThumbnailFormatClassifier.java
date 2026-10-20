@@ -24,6 +24,11 @@ final class ThumbnailFormatClassifier {
         PDF,
         DOCX,
         IMAGE,
+        /**
+         * ADDED 2026-10-20: XLSX, PPTX, DOC, XLS, PPT. Converted to PDF by Gotenberg first,
+         * then the first page becomes the thumbnail (see ThumbnailGenerationService).
+         */
+        OFFICE,
         UNSUPPORTED
     }
 
@@ -62,6 +67,12 @@ final class ThumbnailFormatClassifier {
         }
         if (IMAGE_EXTENSIONS.contains(extension)) {
             return Format.IMAGE;
+        }
+
+        // ADDED 2026-10-20: the other Office formats. DOCX was handled above, so it keeps its own
+        // path. Same list as the PDF conversion, so both features always agree.
+        if (DocumentConversionEligibility.isEligible(contentType, fileName)) {
+            return Format.OFFICE;
         }
 
         return Format.UNSUPPORTED;

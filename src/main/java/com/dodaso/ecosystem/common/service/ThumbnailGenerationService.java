@@ -7,6 +7,7 @@ import java.util.List;
 
 import javax.imageio.ImageIO;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -89,6 +90,18 @@ public class ThumbnailGenerationService {
     private final Thumbnails4jExtractor thumbnails4jExtractor;
     private final DefaultThumbnailIconResolver defaultThumbnailIconResolver;
 
+    /** ADDED 2026-10-20: converts Office files to PDF so their first page can be the thumbnail. */
+    private final GotenbergClient gotenbergClient;
+
+    @Value("${gotenberg.retry.max-attempts:3}")
+    private int maxAttempts;
+
+    @Value("${gotenberg.retry.initial-backoff-ms:2000}")
+    private long initialBackoffMs;
+
+    @Value("${gotenberg.retry.backoff-multiplier:2.0}")
+    private double backoffMultiplier;
+
     @Async(com.dodaso.ecosystem.common.config.ThumbnailAsyncConfig.THUMBNAIL_EXECUTOR_BEAN)
     public void generateThumbnailAsync(final Long thumbnailId, final Long fileUploadId, final byte[] originalContent,
                                         final String contentType, final String fileName, final String sourceContainer,
@@ -101,7 +114,16 @@ public class ThumbnailGenerationService {
             final int widthPx;
             final int heightPx;
 
-            if (format == ThumbnailFormatClassifier.Format.UNSUPPORTED) {
+            // ADDED 2026-10-20: Office formats get a real first-page picture through Gotenberg. When
+            // Gotenberg cannot do it (down, or it rejects the file) the row still completes with the
+            // representative icon, exactly like before, so uploads never end up without a thumbnail.
+            BufferedImage officePage = null;
+            if (format == ThumbnailFormatClassifier.Format.OFFICE) {
+                officePage = tryOfficeFirstPage(originalContent, fileName, fileUploadId);
+            }
+
+            if (format == ThumbnailFormatClassifier.Format.UNSUPPORTED
+                || (format == ThumbnailFormatClassifier.Format.OFFICE && officePage == null)) {
                 // No content-aware preview possible -- a representative icon
                 // by extension/content-type IS the thumbnail for this row,
                 // not a fallback after a failed attempt.
@@ -110,11 +132,11 @@ public class ThumbnailGenerationService {
                 widthPx = icon.getWidth();
                 heightPx = icon.getHeight();
             } else {
-                final BufferedImage extracted = switch (format) {
+                final BufferedImage extracted = officePage != null ? officePage : switch (format) {
                     case PDF -> thumbnails4jExtractor.extractPdfThumbnail(originalContent, MAX_DIMENSION_PX);
                     case DOCX -> thumbnails4jExtractor.extractDocxThumbnail(originalContent, MAX_DIMENSION_PX);
                     case IMAGE -> thumbnails4jExtractor.extractImageThumbnail(originalContent, MAX_DIMENSION_PX);
-                    case UNSUPPORTED -> throw new IllegalStateException("unreachable -- handled above");
+                    case OFFICE, UNSUPPORTED -> throw new IllegalStateException("unreachable -- handled above");
                 };
                 pngBytes = encodeAsPng(extracted);
                 widthPx = extracted.getWidth();
@@ -134,6 +156,27 @@ public class ThumbnailGenerationService {
             log.error("Thumbnail generation failed for file_upload id={} (thumbnail id={}): {}",
                 fileUploadId, thumbnailId, ex.getMessage(), ex);
             thumbnailStatusUpdater.markFailed(thumbnailId, ex);
+        }
+    }
+
+    /**
+     * ADDED 2026-10-20. Converts the Office file to PDF with Gotenberg (same retry rules as the
+     * preview conversion) and renders page one. Returns null on any failure so the caller falls
+     * back to the default icon.
+     */
+    private BufferedImage tryOfficeFirstPage(final byte[] originalContent, final String fileName,
+                                             final Long fileUploadId) {
+        try {
+            final byte[] pdf = GotenbergRetry.execute(
+                () -> gotenbergClient.convertToPdf(fileName, originalContent),
+                () -> { },
+                maxAttempts, initialBackoffMs, backoffMultiplier,
+                GotenbergClient::isTransient, Thread::sleep);
+            return thumbnails4jExtractor.extractPdfThumbnail(pdf, MAX_DIMENSION_PX);
+        } catch (final Exception ex) {
+            log.warn("Office first-page thumbnail failed for file_upload id={}, using the icon instead: {}",
+                fileUploadId, ex.getMessage());
+            return null;
         }
     }
 
