@@ -14,7 +14,10 @@ public enum CommonPermission {
   FILE_UPLOAD("file:upload"),
 
   /** Delete files. */
-  FILE_DELETE("file:delete");
+  FILE_DELETE("file:delete"),
+
+  /** ADDED 2026-10-21. Permanently remove files, their blobs, thumbnails and previews. */
+  FILE_PURGE("file:purge");
 
   private final String code;
 

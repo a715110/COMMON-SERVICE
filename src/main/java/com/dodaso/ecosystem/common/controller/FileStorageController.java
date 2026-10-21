@@ -25,6 +25,7 @@ import com.dodaso.ecosystem.common.dto.FileThumbnailDTO;
 import com.dodaso.ecosystem.common.dto.FileUploadDTO;
 import com.dodaso.ecosystem.common.service.dto.FileUploadRequest;
 import com.dodaso.ecosystem.common.dto.FileUploadRequestDTO;
+import com.dodaso.ecosystem.common.service.FilePurgeService;
 import com.dodaso.ecosystem.common.service.FileUploadService;
 
 import lombok.RequiredArgsConstructor;
@@ -65,6 +66,9 @@ import lombok.extern.slf4j.Slf4j;
 public class FileStorageController {
 
     private final FileUploadService fileUploadService;
+
+    /** ADDED 2026-10-21 (purge job). */
+    private final FilePurgeService filePurgeService;
 
     /**
      * containerName is optional on the request DTO (falls back to
@@ -185,6 +189,26 @@ public class FileStorageController {
     public ResponseEntity<Void> delete(@PathVariable final Long id) {
         fileUploadService.softDelete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * ADDED 2026-10-21 (purge job). Permanently removes the listed files: the blob, the
+     * thumbnail, the converted preview and the file_upload row. Called by the product
+     * services (elcm-service, ecws-service) when their own purge job removes a record
+     * whose file lives here. It is idempotent: an id that no longer exists counts as
+     * removed. The response lists, in fileUploadIds, every id that is gone; an id missing
+     * from the answer must be retried by the caller. The optional fileUploadDTO.sourceApp
+     * in the request guards against a caller removing files of another product.
+     */
+    @RequiresPermission(CommonPermission.FILE_PURGE)
+    @PostMapping(value = "/purge", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<FileUploadDTOContainer> purge(@RequestBody final FileUploadDTOContainer requestContainer) {
+        final String sourceApp = requestContainer.getFileUploadDTO() == null
+            ? null : requestContainer.getFileUploadDTO().getSourceApp();
+        final java.util.Set<Long> gone = filePurgeService.purgeByIds(requestContainer.getFileUploadIds(), sourceApp);
+        final FileUploadDTOContainer responseContainer = new FileUploadDTOContainer();
+        responseContainer.setFileUploadIds(gone);
+        return ResponseEntity.ok(responseContainer);
     }
 
     /**
