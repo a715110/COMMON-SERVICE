@@ -27,7 +27,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *   <li>Token absent: 401 when {@code required}; otherwise the request passes and identity falls
  *       back to the X-User-Context header (rollout mode, logged).
  * </ul>
- * Applies to /api/** only. Not a Spring bean: it is added to the security filter chain in
+ * Applies to /api/** and /userMessagingIdentifierController/** only. Not a Spring bean: it is
+ * added to the security filter chain in
  * {@link com.dodaso.ecosystem.common.config.CommonServiceSecurityConfig}, after the context is set up.
  */
 public class AccessTokenFilter extends OncePerRequestFilter {
@@ -46,7 +47,10 @@ public class AccessTokenFilter extends OncePerRequestFilter {
   @Override
   protected boolean shouldNotFilter(HttpServletRequest request) {
     String path = request.getRequestURI();
-    return path == null || !path.startsWith("/api/");
+    // return path == null || !path.startsWith("/api/");
+    // Messaging identifiers are per user, so their calls need the caller too
+    return path == null || !(path.startsWith("/api/")
+        || path.startsWith("/userMessagingIdentifierController/"));
   }
 
   @Override

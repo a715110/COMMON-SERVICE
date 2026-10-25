@@ -2,6 +2,7 @@ package com.dodaso.ecosystem.common.service;
 
 import com.dodaso.ecosystem.common.entity.UserMessagingIdentifier;
 import com.dodaso.ecosystem.common.repository.UserMessagingIdentifierRepository;
+import com.dodaso.ecosystem.common.security.CallerLogin;
 import com.dodaso.ecosystem.ecws.container.UserMessagingIdentifierDTOContainer;
 import com.dodaso.ecosystem.ecws.dto.UserMessagingIdentifierDTO;
 import java.util.ArrayList;
@@ -72,6 +73,8 @@ public class UserMessagingIdentifierService {
       UserMessagingIdentifierDTOContainer container) throws Exception {
 
     UserMessagingIdentifierDTO dto = container.getUserMessagingIdentifierDTO();
+    // A verified caller saves only their own identifier
+    dto.setLoginId(CallerLogin.actingFor(dto.getLoginId(), "save messaging identifier"));
 
     // Check if identifier already exists for this user and channel
     Optional<UserMessagingIdentifier> existingOpt =
@@ -112,6 +115,8 @@ public class UserMessagingIdentifierService {
     List<UserMessagingIdentifierDTO> savedDtos = new ArrayList<>();
 
     for (UserMessagingIdentifierDTO dto : dtos) {
+      // A verified caller saves only their own identifiers
+      dto.setLoginId(CallerLogin.actingFor(dto.getLoginId(), "save messaging identifiers"));
       // Check if identifier already exists
       Optional<UserMessagingIdentifier> existingOpt =
           identifierRepository.findByLoginIdAndChannelType(dto.getLoginId(), dto.getChannelType());
@@ -140,7 +145,10 @@ public class UserMessagingIdentifierService {
   public void delete(UserMessagingIdentifierDTOContainer container) throws Exception {
     Integer id = container.getUserMessagingIdentifierDTO().getId();
 
-    if (!identifierRepository.existsById(id)) {
+    // if (!identifierRepository.existsById(id)) {
+    // Someone else's identifier looks like a missing one to a verified caller
+    Optional<UserMessagingIdentifier> existing = identifierRepository.findById(id);
+    if (existing.isEmpty() || !CallerLogin.mayActFor(existing.get().getLoginId())) {
       throw new Exception("Messaging identifier not found with id: " + id);
     }
 
@@ -155,7 +163,8 @@ public class UserMessagingIdentifierService {
       UserMessagingIdentifierDTOContainer container) throws Exception {
 
     UserMessagingIdentifierDTO dto = container.getUserMessagingIdentifierDTO();
-    String loginId = dto.getLoginId();
+    // String loginId = dto.getLoginId();
+    String loginId = CallerLogin.actingFor(dto.getLoginId(), "delete messaging identifier");
     String channelType = dto.getChannelType();
 
     identifierRepository.deleteByLoginIdAndChannelType(loginId, channelType);
@@ -166,7 +175,8 @@ public class UserMessagingIdentifierService {
    * Delete all identifiers for a user
    */
   public void deleteAllByLoginId(UserMessagingIdentifierDTOContainer container) throws Exception {
-    String loginId = container.getLoginId();
+    // String loginId = container.getLoginId();
+    String loginId = CallerLogin.actingFor(container.getLoginId(), "delete messaging identifiers");
 
     identifierRepository.deleteByLoginId(loginId);
     log.info("Deleted all messaging identifiers for user {}", loginId);
