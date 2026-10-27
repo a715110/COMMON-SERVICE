@@ -12,6 +12,9 @@ import java.util.Set;
  * one place to change until the role and permission editor replaces it. Upload follows the ELCM
  * rule for adding documents to the pipeline, delete is limited to the admin roles. Role names
  * are matched case insensitively, exactly as stored in IAMS.
+ *
+ * <p>REVISED 2026-10-27: MESSAGING_ADMIN (messaging channel settings) goes to Super Admin and
+ * System Admin only, because they get every permission; no other role is given it.
  */
 public final class CommonRolePermissions {
 

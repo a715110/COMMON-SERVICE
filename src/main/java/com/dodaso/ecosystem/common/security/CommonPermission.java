@@ -17,7 +17,13 @@ public enum CommonPermission {
   FILE_DELETE("file:delete"),
 
   /** ADDED 2026-10-21. Permanently remove files, their blobs, thumbnails and previews. */
-  FILE_PURGE("file:purge");
+  FILE_PURGE("file:purge"),
+
+  /**
+   * ADDED 2026-10-27. Read and change the messaging channel settings (Teams, Slack, email and
+   * the secrets behind them) and test or reset them.
+   */
+  MESSAGING_ADMIN("messaging:admin");
 
   private final String code;
 

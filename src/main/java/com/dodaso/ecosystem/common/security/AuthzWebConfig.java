@@ -5,7 +5,11 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-/** Registers {@link PermissionInterceptor} for the REST API. */
+/**
+ * Registers {@link PermissionInterceptor} for the REST API.
+ *
+ * <p>REVISED 2026-10-27: also for the messaging channel settings, which are not under /api.
+ */
 @Configuration
 @RequiredArgsConstructor
 public class AuthzWebConfig implements WebMvcConfigurer {
@@ -14,6 +18,8 @@ public class AuthzWebConfig implements WebMvcConfigurer {
 
   @Override
   public void addInterceptors(InterceptorRegistry registry) {
-    registry.addInterceptor(permissionInterceptor).addPathPatterns("/api/**");
+    registry
+        .addInterceptor(permissionInterceptor)
+        .addPathPatterns("/api/**", "/systemMessagingConfigController/**");
   }
 }

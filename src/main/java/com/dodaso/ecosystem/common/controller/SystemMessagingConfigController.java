@@ -1,7 +1,10 @@
 package com.dodaso.ecosystem.common.controller;
 
+import com.dodaso.ecosystem.common.security.CommonPermission;
+import com.dodaso.ecosystem.common.security.RequiresPermission;
 import com.dodaso.ecosystem.common.service.SystemMessagingConfigService;
 import com.dodaso.ecosystem.ecws.container.SystemMessagingConfigDTOContainer;
+import com.dodaso.ecosystem.ecws.dto.SystemMessagingConfigDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -11,6 +14,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * REVISED 2026-10-27. Every endpoint needs the MESSAGING_ADMIN permission (Super Admin and System
+ * Admin) except findAllActive, which the Message button of every user needs. findAllActive returns
+ * the active channels without their secrets (client secret, SMTP password, webhook address).
+ */
 @RestController
 @RequestMapping("/systemMessagingConfigController")
 @Slf4j
@@ -22,6 +30,7 @@ public class SystemMessagingConfigController {
   /**
    * Find all messaging configurations
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @GetMapping("/findAll")
   public ResponseEntity<SystemMessagingConfigDTOContainer> findAll() {
     try {
@@ -42,6 +51,7 @@ public class SystemMessagingConfigController {
     try {
       SystemMessagingConfigDTOContainer container = new SystemMessagingConfigDTOContainer();
       container = configService.findAllActive(container);
+      maskSecrets(container);
       return ResponseEntity.ok(container);
     } catch (Exception e) {
       log.error("Error in findAllActive", e);
@@ -52,6 +62,7 @@ public class SystemMessagingConfigController {
   /**
    * Find configuration by channel type
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/findByChannelType")
   public ResponseEntity<SystemMessagingConfigDTOContainer> findByChannelType(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -67,6 +78,7 @@ public class SystemMessagingConfigController {
   /**
    * Find configuration by ID
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/findById")
   public ResponseEntity<SystemMessagingConfigDTOContainer> findById(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -82,6 +94,7 @@ public class SystemMessagingConfigController {
   /**
    * Save or update a messaging configuration
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/save")
   public ResponseEntity<SystemMessagingConfigDTOContainer> save(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -99,6 +112,7 @@ public class SystemMessagingConfigController {
   /**
    * Save all configurations (batch update)
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/saveAll")
   public ResponseEntity<SystemMessagingConfigDTOContainer> saveAll(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -114,6 +128,7 @@ public class SystemMessagingConfigController {
   /**
    * Delete a messaging configuration
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/delete")
   public ResponseEntity<Void> delete(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -129,6 +144,7 @@ public class SystemMessagingConfigController {
   /**
    * Toggle active status
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/toggleActive")
   public ResponseEntity<SystemMessagingConfigDTOContainer> toggleActive(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -144,6 +160,7 @@ public class SystemMessagingConfigController {
   /**
    * Test connection for a messaging configuration
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/testConnection")
   public ResponseEntity<SystemMessagingConfigDTOContainer> testConnection(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -159,6 +176,7 @@ public class SystemMessagingConfigController {
   /**
    * Initialize default configurations
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/initializeDefaults")
   public ResponseEntity<SystemMessagingConfigDTOContainer> initializeDefaults(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -174,6 +192,7 @@ public class SystemMessagingConfigController {
   /**
    * Reset all configurations to defaults
    */
+  @RequiresPermission(CommonPermission.MESSAGING_ADMIN)
   @PostMapping("/resetToDefaults")
   public ResponseEntity<SystemMessagingConfigDTOContainer> resetToDefaults(
       @RequestBody SystemMessagingConfigDTOContainer container) {
@@ -183,6 +202,21 @@ public class SystemMessagingConfigController {
     } catch (Exception e) {
       log.error("Error in resetToDefaults", e);
       return ResponseEntity.internalServerError().build();
+    }
+  }
+
+  /**
+   * ADDED 2026-10-27. The active channel list is read by every user, so the secrets are removed
+   * here, as MessagingChannelController does for the default channel.
+   */
+  private static void maskSecrets(final SystemMessagingConfigDTOContainer container) {
+    if (container.getSystemMessagingConfigDTOS() == null) {
+      return;
+    }
+    for (final SystemMessagingConfigDTO dto : container.getSystemMessagingConfigDTOS()) {
+      dto.setClientSecret(null);
+      dto.setSmtpPassword(null);
+      dto.setWebhookUrl(null);
     }
   }
 }
