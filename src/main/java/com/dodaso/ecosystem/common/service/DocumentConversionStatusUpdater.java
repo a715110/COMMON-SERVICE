@@ -69,6 +69,12 @@ public class DocumentConversionStatusUpdater {
 
     @Transactional
     public void markCompleted(final Long conversionId, final BlobUploadResult pdfBlob) {
+        markCompleted(conversionId, pdfBlob, null);
+    }
+
+    /** Same as markCompleted(conversionId, pdfBlob), also saving the PDF's page count (null when unknown). */
+    @Transactional
+    public void markCompleted(final Long conversionId, final BlobUploadResult pdfBlob, final Integer pageCount) {
         final DocumentConversion conversion = documentConversionRepository.findById(conversionId).orElse(null);
         if (conversion == null) {
             log.warn("document_conversion id={} disappeared before it could be marked COMPLETED", conversionId);
@@ -78,6 +84,7 @@ public class DocumentConversionStatusUpdater {
         conversion.setBlobContainer(pdfBlob.blobContainer());
         conversion.setBlobPath(pdfBlob.blobPath());
         conversion.setBlobUrl(pdfBlob.blobUrl());
+        conversion.setPageCount(pageCount);
         conversion.setCompletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         conversion.setLastErrorMessage(null);
         documentConversionRepository.save(conversion);

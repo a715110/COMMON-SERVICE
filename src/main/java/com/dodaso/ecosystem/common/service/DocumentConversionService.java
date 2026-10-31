@@ -2,6 +2,8 @@ package com.dodaso.ecosystem.common.service;
 
 import java.util.List;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -85,12 +87,29 @@ public class DocumentConversionService {
                 List.of(pdfRequest), sourceContainer, context);
             final BlobUploadResult pdfBlob = uploadResults.get(0);
 
-            documentConversionStatusUpdater.markCompleted(conversionId, pdfBlob);
-            log.info("Document conversion ready for file_upload id={} (conversion id={})", fileUploadId, conversionId);
+            // documentConversionStatusUpdater.markCompleted(conversionId, pdfBlob);
+            final Integer pageCount = countPages(pdfBytes);
+            documentConversionStatusUpdater.markCompleted(conversionId, pdfBlob, pageCount);
+            log.info("Document conversion ready for file_upload id={} (conversion id={}, {} page(s))",
+                fileUploadId, conversionId, pageCount);
         } catch (final Exception ex) {
             log.error("Document conversion failed for file_upload id={} (conversion id={}): {}",
                 fileUploadId, conversionId, ex.getMessage(), ex);
             documentConversionStatusUpdater.markFailed(conversionId, ex);
+        }
+    }
+
+    /**
+     * Pages in the converted PDF, or null when PDFBox can't read it. The PDF is
+     * already stored by then, so an unreadable page count doesn't fail the
+     * conversion; page_count just stays empty.
+     */
+    static Integer countPages(final byte[] pdfBytes) {
+        try (PDDocument pdf = Loader.loadPDF(pdfBytes)) {
+            return pdf.getNumberOfPages();
+        } catch (final Exception ex) {
+            log.warn("Could not count the pages of a converted PDF: {}", ex.getMessage());
+            return null;
         }
     }
 }

@@ -471,6 +471,12 @@
       <artifactId>thumbnails4j-pdf</artifactId>
       <version>1.2.0</version>
     </dependency>
+    <!-- Page count of converted PDFs; same version thumbnails4j-pdf brings in -->
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>3.0.5</version>
+    </dependency>
 
     <dependency>
       <groupId>co.elastic.thumbnails4j</groupId>
