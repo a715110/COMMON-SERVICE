@@ -15,8 +15,14 @@ import java.util.Set;
  *
  * <p>REVISED 2026-10-27: MESSAGING_ADMIN (messaging channel settings) goes to Super Admin and
  * System Admin only, because they get every permission; no other role is given it.
+ *
+ * <p>ADDED 2026-11-06: {@link #SERVICE_ROLE} is not an IAMS role. It is given to a listed service
+ * (see {@link AccessTokenFilter}) for background work with no user, and may only view files.
  */
 public final class CommonRolePermissions {
+
+  /** Role of a trusted platform service calling without a user. Never comes from IAMS. */
+  public static final String SERVICE_ROLE = "Platform Service";
 
   private static final Map<String, Set<CommonPermission>> BY_ROLE = new HashMap<>();
 
@@ -26,6 +32,7 @@ public final class CommonRolePermissions {
     Set<CommonPermission> viewAndUpload =
         EnumSet.of(CommonPermission.FILE_VIEW, CommonPermission.FILE_UPLOAD);
 
+    put(SERVICE_ROLE, viewOnly);
     put("Super Admin", all);
     put("System Admin", all);
     put("Document Submitter", viewAndUpload);
