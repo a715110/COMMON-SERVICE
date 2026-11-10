@@ -14,7 +14,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,59 +75,46 @@ public class TeamsNotificationService {
   }
 
   /**
-   * Posts the card in the request to the webhook and writes a log row either way. A request
-   * without a payload only writes the log row (status and detail as given).
+   * Posts the card(s) in the request and writes one log row either way. A request without a card
+   * only writes the log row (status and detail as given).
+   *
+   * <p>ADDED 2026-11-08. Delivery (request.delivery): "channel" (default) posts payload to the
+   * shared channel webhook as before; "direct" posts directPayload to the direct webhook, whose
+   * flow sends it to recipientAddress as a private chat, and falls back to the channel when a
+   * direct message is not possible; "both" does both.
    */
   public SendResultDTO post(final TeamsNotifyDTO request) {
     String status = StringUtils.defaultIfBlank(request.getStatus(), "FAILED");
     String detail = request.getDetail();
-    log.info("Teams post received: key={}, type={}, task={}, recipient={}, payload={} chars, status given={}",
-        request.getEventKey(), request.getEventType(), request.getTaskId(), request.getRecipientLogin(),
-        request.getPayload() == null ? 0 : request.getPayload().length(), request.getStatus());
-    if (StringUtils.isNotBlank(request.getPayload())) {
-      final long started = System.nanoTime();
-      long idleSeconds = -1;
-      try {
-        final String webhook = webhookUrl(request.getWebhookOverride());
-        if (StringUtils.isBlank(webhook)) {
-          status = "SKIPPED";
-          detail = "No Teams webhook address (ecws.teams-events.webhook-url or TEAMS row)";
-          log.warn("Teams post {}: {}", request.getEventKey(), detail);
-        } else {
-          final long previous = lastWebhookCall.getAndSet(System.currentTimeMillis());
-          idleSeconds = previous == 0 ? -1 : (System.currentTimeMillis() - previous) / 1000;
-          // Host only: the rest of the address holds the secret
-          log.info("Teams webhook call #{}: key={}, host={}, idle since the last call: {} s"
-              + " (-1 = first call since start-up)", webhookCalls.incrementAndGet(),
-              request.getEventKey(), hostOf(webhook), idleSeconds);
-          final HttpResponse<String> response = http.send(HttpRequest.newBuilder()
-              .uri(URI.create(webhook))
-              .timeout(Duration.ofSeconds(20))
-              .header("Content-Type", "application/json")
-              .POST(HttpRequest.BodyPublishers.ofString(request.getPayload(),
-                  StandardCharsets.UTF_8))
-              .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-          final long ms = (System.nanoTime() - started) / 1_000_000;
-          if (response.statusCode() / 100 == 2) {
-            status = "SENT";
-            detail = "HTTP " + response.statusCode();
-            log.info("Teams webhook answered: key={}, HTTP {}, {} ms", request.getEventKey(),
-                response.statusCode(), ms);
-          } else {
-            status = "FAILED";
-            detail = "HTTP " + response.statusCode() + " "
-                + StringUtils.abbreviate(response.body(), 200);
-            log.warn("Teams webhook refused {} (key={}, {} ms): {}", request.getEventType(),
-                request.getEventKey(), ms, detail);
-          }
-        }
-      } catch (final Exception e) {
-        status = "FAILED";
-        detail = StringUtils.abbreviate(e.getClass().getSimpleName() + ": " + e.getMessage(), 480);
-        log.warn("Teams notification failed for {} (key={}) after {} ms, idle before the call {} s,"
-            + " {} / root cause: {}", request.getEventType(), request.getEventKey(),
-            (System.nanoTime() - started) / 1_000_000, idleSeconds, e.getClass().getName(),
-            rootCause(e), e);
+    final boolean hasChannelCard = StringUtils.isNotBlank(request.getPayload());
+    final boolean hasDirectCard = StringUtils.isNotBlank(request.getDirectPayload());
+    log.info("Teams post received: key={}, type={}, task={}, recipient={}, delivery={}, card={} chars,"
+        + " directCard={} chars, status given={}", request.getEventKey(), request.getEventType(),
+        request.getTaskId(), request.getRecipientLogin(), request.getDelivery(),
+        hasChannelCard ? request.getPayload().length() : 0,
+        hasDirectCard ? request.getDirectPayload().length() : 0, request.getStatus());
+    if (hasChannelCard || hasDirectCard) {
+      final Route route = route(request.getDelivery(), hasDirectCard,
+          StringUtils.isNotBlank(request.getRecipientAddress()),
+          StringUtils.isNotBlank(request.getDirectWebhookOverride()));
+      log.info("Teams post {}: route channel={}, direct={}{}", request.getEventKey(),
+          route.channel(), route.direct(), route.note() == null ? "" : " (" + route.note() + ")");
+      final List<Outcome> outcomes = new ArrayList<>();
+      if (route.direct()) {
+        outcomes.add(send("direct", request.getDirectWebhookOverride(), request.getDirectPayload(),
+            request));
+      }
+      if (route.channel() && hasChannelCard) {
+        final String label = route.fallback() ? "channel, fallback" : "channel";
+        outcomes.add(send(label, webhookUrl(request.getWebhookOverride()), request.getPayload(),
+            request));
+      }
+      if (!outcomes.isEmpty()) {
+        final boolean allSent = outcomes.stream().allMatch(o -> "SENT".equals(o.status()));
+        final boolean anySkipped = outcomes.stream().anyMatch(o -> "SKIPPED".equals(o.status()));
+        status = allSent ? "SENT" : anySkipped && outcomes.size() == 1 ? "SKIPPED" : "FAILED";
+        detail = outcomes.stream().map(o -> o.label() + ": " + o.detail())
+            .collect(Collectors.joining("; "));
       }
     } else {
       log.info("Teams post {}: no card in the request, only the log row is written ({})",
@@ -133,6 +124,79 @@ public class TeamsNotificationService {
     log.info("Teams post finished: key={}, status={}", request.getEventKey(), status);
     return "SENT".equals(status) ? SendResultDTO.success("Reminder sent to Teams")
         : SendResultDTO.failure(detail);
+  }
+
+  /** Where one card goes. note is set when a direct message was wanted but is not possible; fallback when the channel then stands in for it. */
+  record Route(boolean channel, boolean direct, String note, boolean fallback) {
+  }
+
+  private record Outcome(String label, String status, String detail) {
+  }
+
+  /**
+   * Decides the route. Unknown or blank delivery means the shared channel, the behaviour before
+   * direct messages existed.
+   */
+  static Route route(final String delivery, final boolean hasDirectCard,
+      final boolean hasRecipientAddress, final boolean hasDirectWebhook) {
+    final String mode = StringUtils.defaultIfBlank(delivery, "channel").trim().toLowerCase(Locale.ROOT);
+    final boolean wantDirect = "direct".equals(mode) || "both".equals(mode);
+    String why = null;
+    if (wantDirect && !hasDirectCard) {
+      why = "no direct card built";
+    } else if (wantDirect && !hasRecipientAddress) {
+      why = "no Teams address mapped for the recipient";
+    } else if (wantDirect && !hasDirectWebhook) {
+      why = "no direct webhook address (ecws.teams-events.direct-webhook-url)";
+    }
+    final boolean direct = wantDirect && why == null;
+    final boolean fallback = "direct".equals(mode) && !direct;
+    final boolean channel = !"direct".equals(mode) || fallback;
+    return new Route(channel, direct, wantDirect && !direct ? why : null, fallback);
+  }
+
+  /** One webhook call, logged. Never throws. */
+  private Outcome send(final String label, final String webhook, final String payload,
+      final TeamsNotifyDTO request) {
+    final long started = System.nanoTime();
+    long idleSeconds = -1;
+    try {
+      if (StringUtils.isBlank(webhook)) {
+        final String detail = "No Teams webhook address (ecws.teams-events.webhook-url or TEAMS row)";
+        log.warn("Teams post {} ({}): {}", request.getEventKey(), label, detail);
+        return new Outcome(label, "SKIPPED", detail);
+      }
+      final long previous = lastWebhookCall.getAndSet(System.currentTimeMillis());
+      idleSeconds = previous == 0 ? -1 : (System.currentTimeMillis() - previous) / 1000;
+      // Host only: the rest of the address holds the secret
+      log.info("Teams webhook call #{} ({}): key={}, host={}, idle since the last call: {} s"
+          + " (-1 = first call since start-up)", webhookCalls.incrementAndGet(), label,
+          request.getEventKey(), hostOf(webhook), idleSeconds);
+      final HttpResponse<String> response = http.send(HttpRequest.newBuilder()
+          .uri(URI.create(webhook))
+          .timeout(Duration.ofSeconds(20))
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+          .build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      final long ms = (System.nanoTime() - started) / 1_000_000;
+      if (response.statusCode() / 100 == 2) {
+        log.info("Teams webhook answered ({}): key={}, HTTP {}, {} ms", label,
+            request.getEventKey(), response.statusCode(), ms);
+        return new Outcome(label, "SENT", "HTTP " + response.statusCode());
+      }
+      final String detail = "HTTP " + response.statusCode() + " "
+          + StringUtils.abbreviate(response.body(), 200);
+      log.warn("Teams webhook refused {} ({}, key={}, {} ms): {}", request.getEventType(), label,
+          request.getEventKey(), ms, detail);
+      return new Outcome(label, "FAILED", detail);
+    } catch (final Exception e) {
+      log.warn("Teams notification failed for {} ({}, key={}) after {} ms, idle before the call {} s,"
+          + " {} / root cause: {}", request.getEventType(), label, request.getEventKey(),
+          (System.nanoTime() - started) / 1_000_000, idleSeconds, e.getClass().getName(),
+          rootCause(e), e);
+      return new Outcome(label, "FAILED",
+          StringUtils.abbreviate(e.getClass().getSimpleName() + ": " + e.getMessage(), 400));
+    }
   }
 
   private static String hostOf(final String url) {
